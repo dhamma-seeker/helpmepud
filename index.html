@@ -167,8 +167,28 @@
         <p class="note" id="ttsNote"></p>
       </div>
 
+      <label for="ttsThEngine">เสียงอ่านภาษาไทย (ใช้อ่านคำตอบ AI)</label>
+      <select id="ttsThEngine">
+        <option value="device">เสียงของเครื่อง (ฟรี)</option>
+        <option value="openrouter">เสียง AI ผ่าน OpenRouter (เสียเงินตามตัวอักษร)</option>
+      </select>
+      <div id="deviceVoiceTh">
+        <label for="voiceTh">เสียงไทยของเครื่อง</label>
+        <select id="voiceTh"></select>
+        <p class="note" id="voiceThNote"></p>
+      </div>
+      <div id="aiVoiceTh" hidden>
+        <label>โมเดลเสียง</label>
+        <button id="ttsThModelBtn" type="button" class="pick"></button>
+        <label for="ttsThVoice">เสียง</label>
+        <select id="ttsThVoice"></select>
+        <p class="note" id="ttsThNote"></p>
+      </div>
+      <label class="row"><input type="checkbox" id="autoRead"> อ่านคำตอบ AI ออกเสียงอัตโนมัติ (ถามคำ, ค้นเว็บ)</label>
+
       <div class="btnrow">
-        <button id="voiceTest" type="button">🔊 ฟังตัวอย่าง</button>
+        <button id="voiceTest" type="button">🔊 ฟังตัวอย่าง (อังกฤษ)</button>
+        <button id="voiceTestTh" type="button">🔊 ฟังตัวอย่าง (ไทย)</button>
       </div>
       <p class="note">การตั้งค่าเสียงจำแยกตามอุปกรณ์ เสียง AI จะเล่นซ้ำจากแคชโดยไม่เสียเงินเพิ่มเมื่อกดฟังประโยคเดิม</p>
 

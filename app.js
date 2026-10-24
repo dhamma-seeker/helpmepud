@@ -36,6 +36,9 @@ const DEFAULT_MODEL = 'google/gemini-2.5-flash';
   state.favs = store.get('favs', []);
   state.tts = { engine: 'device', model: '', voice: '', instructions: '', ...store.get('tts', {}) };
   state.stt = { engine: 'browser', model: '', ...store.get('stt', {}) };
+  state.ttsTh = { engine: 'device', model: '', voice: '', instructions: '', ...store.get('ttsTh', {}) };
+  state.voiceTh = store.get('voiceTh', '');
+  state.autoRead = store.get('autoRead', false);
 }
 
 // ประวัติและที่บันทึก เก็บในเครื่องนี้เท่านั้น
@@ -319,10 +322,16 @@ function parseLabeled(text) {
 
 /* ---------- speech ---------- */
 
-// คืน Promise ที่เสร็จเมื่ออ่านจบ (ใช้หยุดไมค์ไม่ให้ได้ยินเสียงตัวเอง)
-const enVoices = () => speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith('en'));
+const hasSynth = 'speechSynthesis' in window;
+const deviceVoices = (prefix) => (hasSynth ? speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith(prefix)) : []);
+const enVoices = () => deviceVoices('en');
+const thVoices = () => deviceVoices('th');
 
-function pickVoice() {
+function pickVoice(lang = 'en') {
+  if (lang === 'th') {
+    const list = thVoices();
+    return list.find((v) => v.voiceURI === state.voiceTh) || list[0];
+  }
   const list = enVoices();
   return list.find((v) => v.voiceURI === state.voice) ||
     list.find((v) => v.lang === 'en-US') || list[0];
@@ -344,11 +353,13 @@ function unlockAudio() {
   player.play().then(() => { if (player.src === SILENT_WAV) player.pause(); }).catch(() => {});
 }
 // เล่นเสียงเงียบหนึ่งครั้งเฉพาะเมื่อใช้เสียง AI ไม่แตะระบบเสียงของผู้ใช้เครื่องอื่น (กันชนกับไมค์บน iOS)
-document.addEventListener('pointerdown', () => { if (state.tts.engine === 'openrouter') unlockAudio(); });
+document.addEventListener('pointerdown', () => {
+  if (state.tts.engine === 'openrouter' || state.ttsTh.engine === 'openrouter') unlockAudio();
+});
 
 function stopSpeech() {
   speakSeq++;
-  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  if (hasSynth) speechSynthesis.cancel();
   player.pause();
   playResolve?.();
   playResolve = null;
@@ -363,40 +374,41 @@ function toast(msg, ms = 5000) {
   toastTimer = setTimeout(() => (t.hidden = true), ms);
 }
 
-async function speakAI(text, seq) {
-  const t = state.tts;
-  const key = [t.model, t.voice, t.instructions, text].join('\u0001');
+// สร้างเสียงด้วยโมเดลของ OpenRouter คืน object URL (มีแคช)
+async function ttsUrl(text, cfg) {
+  const key = [cfg.model, cfg.voice, cfg.instructions || '', text].join('\u0001');
   let url = ttsCache.get(key);
-  if (!url) {
-    const body = { model: t.model, input: text, response_format: 'mp3' };
-    if (t.voice) body.voice = t.voice;
-    if (t.instructions.trim()) body.instructions = t.instructions.trim();
-    const res = await fetch('https://openrouter.ai/api/v1/audio/speech', {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + state.key,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': location.origin,
-        'X-Title': 'HelpMePud',
-      },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      let msg = 'HTTP ' + res.status;
-      try { const j = await res.json(); msg = j.error?.message || msg; } catch { /* not json */ }
-      throw new Error(msg);
-    }
-    const blob = await res.blob();
-    url = URL.createObjectURL(blob);
-    ttsCache.set(key, url);
-    if (ttsCache.size > 30) {
-      const oldest = ttsCache.keys().next().value;
-      URL.revokeObjectURL(ttsCache.get(oldest));
-      ttsCache.delete(oldest);
-    }
+  if (url) return url;
+  const body = { model: cfg.model, input: text, response_format: 'mp3' };
+  if (cfg.voice) body.voice = cfg.voice;
+  if (cfg.instructions?.trim()) body.instructions = cfg.instructions.trim();
+  const res = await fetch('https://openrouter.ai/api/v1/audio/speech', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer ' + state.key,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': location.origin,
+      'X-Title': 'HelpMePud',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let msg = 'HTTP ' + res.status;
+    try { const j = await res.json(); msg = j.error?.message || msg; } catch { /* not json */ }
+    throw new Error(msg);
   }
-  if (seq !== speakSeq) return; // มีคำสั่งอ่านใหม่แทรกระหว่างรอเสียง
-  await new Promise((resolve, reject) => {
+  url = URL.createObjectURL(await res.blob());
+  ttsCache.set(key, url);
+  if (ttsCache.size > 40) {
+    const oldest = ttsCache.keys().next().value;
+    URL.revokeObjectURL(ttsCache.get(oldest));
+    ttsCache.delete(oldest);
+  }
+  return url;
+}
+
+function playUrl(url) {
+  return new Promise((resolve, reject) => {
     playResolve = resolve;
     player.onended = resolve;
     player.onerror = () => reject(new Error('เล่นเสียงไม่ได้'));
@@ -406,33 +418,131 @@ async function speakAI(text, seq) {
   });
 }
 
-// คืน Promise ที่เสร็จเมื่ออ่านจบ (ใช้หยุดไมค์ไม่ให้ได้ยินเสียงตัวเอง)
-function speak(text) {
-  stopSpeech();
-  if (!text) return Promise.resolve();
-  const seq = speakSeq;
-  if (state.tts.engine === 'openrouter' && state.key && state.tts.model) {
-    return speakAI(text, seq).catch((e) => {
-      toast('เสียง AI ใช้ไม่ได้ (' + e.message + ') ใช้เสียงของเครื่องแทน');
-      return seq === speakSeq ? speakDevice(text) : undefined;
-    });
+// แบ่งข้อความยาวเป็นท่อนสั้น เพราะเสียงของเครื่องบางเบราว์เซอร์ตัดเสียงกลางประโยคยาว
+function chunkText(text, max = 180) {
+  const parts = text.match(/[^.!?。\n]+[.!?。]*\s*/g) || [text];
+  const out = [];
+  let cur = '';
+  for (const p of parts) {
+    if (cur && (cur + p).length > max) { out.push(cur); cur = ''; }
+    cur += p;
   }
-  return speakDevice(text);
+  if (cur.trim()) out.push(cur);
+  return out;
 }
 
-function speakDevice(text) {
+let warnedNoThai = false;
+
+function speakChunk(text, lang) {
   return new Promise((resolve) => {
-    if (!('speechSynthesis' in window)) return resolve();
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'en-US';
+    const v = pickVoice(lang);
+    u.lang = v?.lang || (lang === 'th' ? 'th-TH' : 'en-US');
+    if (v) u.voice = v;
     u.rate = state.rate;
     u.pitch = state.pitch;
-    const v = pickVoice();
-    if (v) { u.voice = v; u.lang = v.lang; }
     const t = setTimeout(resolve, 30000);
     u.onend = u.onerror = () => { clearTimeout(t); resolve(); };
     speechSynthesis.speak(u);
   });
+}
+
+async function speakDevice(text, lang, seq) {
+  if (!hasSynth) return;
+  if (lang === 'th' && !pickVoice('th')) {
+    if (!warnedNoThai) {
+      warnedNoThai = true;
+      toast('เครื่องนี้ไม่มีเสียงภาษาไทยในตัว เลือก "เสียง AI ผ่าน OpenRouter" สำหรับภาษาไทยในตั้งค่า', 8000);
+    }
+    return;
+  }
+  for (const c of chunkText(text)) {
+    if (seq !== speakSeq) return;
+    await speakChunk(c, lang);
+  }
+}
+
+const ttsCfg = (lang) => (lang === 'th' ? state.ttsTh : state.tts);
+const useAI = (cfg) => cfg.engine === 'openrouter' && state.key && cfg.model;
+
+// อ่านทีละช่วงภาษา ดึงเสียง AI ล่วงหน้า 2 ช่วงถัดไประหว่างเล่นช่วงปัจจุบัน
+async function speakRuns(runs) {
+  stopSpeech();
+  const seq = speakSeq;
+  runs = runs.filter((r) => r.text.trim());
+  let aiFailed = false;
+  const fetches = [];
+  const start = (i) => {
+    if (i >= runs.length || fetches[i] !== undefined) return;
+    const cfg = ttsCfg(runs[i].lang);
+    fetches[i] = useAI(cfg)
+      ? ttsUrl(runs[i].text, cfg).catch((e) => {
+        if (!aiFailed) { aiFailed = true; toast('เสียง AI ใช้ไม่ได้ (' + e.message + ') ใช้เสียงของเครื่องแทน'); }
+        return null;
+      })
+      : null;
+  };
+  for (let i = 0; i < runs.length; i++) {
+    if (seq !== speakSeq) return;
+    start(i); start(i + 1); start(i + 2);
+    const url = fetches[i] ? await fetches[i] : null;
+    if (seq !== speakSeq) return;
+    try {
+      if (url) await playUrl(url);
+      else await speakDevice(runs[i].text, runs[i].lang, seq);
+    } catch (e) { toast(e.message); }
+  }
+}
+
+// อ่านข้อความอังกฤษ (คำแปล) คืน Promise ที่เสร็จเมื่ออ่านจบ (ใช้หยุดไมค์ไม่ให้ได้ยินเสียงตัวเอง)
+function speak(text) {
+  return text ? speakRuns([{ lang: 'en', text }]) : Promise.resolve();
+}
+
+// แยกข้อความเป็นช่วงไทย/อังกฤษ เพื่อใช้เสียงที่ตรงกับภาษา (คำตอบโค้ชภาษาไทยมีประโยคอังกฤษปน)
+function langRuns(text) {
+  const runs = [];
+  let cur = null;
+  const push = () => { if (cur?.text.trim()) runs.push(cur); };
+  for (const ch of text) {
+    const l = /[฀-๿]/.test(ch) ? 'th' : /[A-Za-z]/.test(ch) ? 'en' : null;
+    if (!cur) cur = { lang: l || 'th', text: '', set: !!l };
+    if (l && !cur.set) { cur.lang = l; cur.set = true; }
+    else if (l && l !== cur.lang) { push(); cur = { lang: l, text: '', set: true }; }
+    cur.text += ch;
+  }
+  push();
+  return runs;
+}
+
+// ตัด markdown ออกก่อนอ่าน และจำกัดความยาวเพื่อคุมค่าเสียง AI
+function plainForSpeech(t) {
+  return t
+    .replace(/```[\s\S]*?(```|$)/g, ' ')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/^\s{0,3}#{1,6}\s*/gm, '')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/^\s*([-*+]|\d+[.)])\s+/gm, '')
+    .replace(/[|*_`~]+/g, ' ')
+    .replace(/\n{2,}/g, '. ')
+    .replace(/\n/g, ', ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .slice(0, 1500);
+}
+
+function speakAnswer(text) {
+  return speakRuns(langRuns(plainForSpeech(text)));
+}
+
+// ปุ่มฟัง/หยุด บนการ์ดคำตอบและโน้ต
+function toggleListen(btn, text) {
+  if (btn._playing) { stopSpeech(); return; }
+  stopSpeech();
+  btn._playing = true;
+  btn.textContent = '■ หยุด';
+  speakAnswer(text).finally(() => { btn._playing = false; btn.textContent = '🔊 ฟัง'; });
 }
 
 /* ---------- รับเสียงพูด: ระบบของเบราว์เซอร์ หรือบันทึกเสียงแล้วถอดด้วย OpenRouter ---------- */
@@ -1370,7 +1480,10 @@ function toolChips(names) {
 
 function copyRow(text) {
   const acts = el('div', 'acts');
-  acts.append(actBtn('คัดลอก', function () { copy(text, this); }));
+  acts.append(
+    actBtn('🔊 ฟัง', function () { toggleListen(this, text); }),
+    actBtn('คัดลอก', function () { copy(text, this); }),
+  );
   return acts;
 }
 
@@ -1433,6 +1546,7 @@ $('#askForm').addEventListener('submit', async (e) => {
     list.push({ q, a: answer, tools: used, ts: Date.now() });
     db.ask[topic] = list.slice(-HISTORY_MAX);
     persist('ask');
+    if (state.autoRead) speakAnswer(answer);
   } catch (err) {
     me.remove();
     ans.remove();
@@ -1567,7 +1681,8 @@ const TTS_DEFAULT = 'hexgrad/kokoro-82m';
 const KOKORO_GROUP = { af: 'หญิง US', am: 'ชาย US', bf: 'หญิง UK', bm: 'ชาย UK' };
 
 // ตัดเสียงภาษาอื่นออก ให้เหลือเสียงอังกฤษ (บางโมเดลมีเป็นร้อยเสียง)
-function voiceFilter(modelId) {
+function voiceFilter(modelId, lang = 'en') {
+  if (lang === 'th') return modelId.startsWith('microsoft/') ? (v) => /^th-/.test(v) : () => true;
   if (modelId.startsWith('hexgrad/kokoro')) return (v) => /^[ab][fm]_/.test(v);
   if (modelId.startsWith('mistralai/')) return (v) => /^en_/.test(v);
   if (modelId.startsWith('minimax/')) return (v) => /^English/i.test(v);
@@ -1630,6 +1745,72 @@ $('#ttsModelBtn').addEventListener('click', () => openSheet({
 }));
 $('#ttsVoice').addEventListener('change', (e) => { state.tts.voice = e.target.value; saveTts(); speak('Nice to meet you.'); });
 $('#ttsInstr').addEventListener('input', (e) => { state.tts.instructions = e.target.value; saveTts(); });
+
+/* ---------- เสียงอ่านภาษาไทย ---------- */
+
+const TTS_TH_DEFAULT = 'microsoft/mai-voice-2.1-flash';
+
+function renderVoicesTh() {
+  const sel = $('#voiceTh');
+  const list = thVoices();
+  sel.replaceChildren(el('option', '', 'อัตโนมัติ'));
+  sel.firstChild.value = '';
+  for (const v of list) { const o = el('option', '', v.name + ' (' + v.lang + ')'); o.value = v.voiceURI; sel.append(o); }
+  sel.value = list.some((v) => v.voiceURI === state.voiceTh) ? state.voiceTh : '';
+  $('#voiceThNote').textContent = list.length ? '' : 'เครื่องนี้ไม่มีเสียงภาษาไทยในตัว ถ้าต้องการให้อ่านคำตอบภาษาไทย ให้เลือกเสียง AI ผ่าน OpenRouter';
+}
+
+function saveTtsTh() { store.set('ttsTh', state.ttsTh); }
+
+async function renderTtsTh() {
+  const ai = state.ttsTh.engine === 'openrouter';
+  $('#ttsThEngine').value = state.ttsTh.engine;
+  $('#deviceVoiceTh').hidden = ai;
+  $('#aiVoiceTh').hidden = !ai;
+  if (!ai) { renderVoicesTh(); return; }
+  $('#ttsThModelBtn').textContent = state.ttsTh.model || 'เลือกโมเดลเสียง';
+  const sel = $('#ttsThVoice');
+  const note = $('#ttsThNote');
+  note.textContent = state.key ? '' : 'ยังไม่ได้ใส่ OpenRouter API key เสียงไทยจะใช้เสียงของเครื่องแทน ';
+  try { await loadCatalog('tts'); } catch { /* พิมพ์ id เองได้ */ }
+  const m = (catalog.tts || []).find((x) => x.id === state.ttsTh.model);
+  if (m?.voices?.length) {
+    let voices = m.voices.filter(voiceFilter(m.id, 'th'));
+    if (!voices.length) voices = m.voices;
+    sel.replaceChildren(...voices.map((v) => { const o = el('option', '', voiceLabel(m.id, v)); o.value = v; return o; }));
+    if (!voices.includes(state.ttsTh.voice)) { state.ttsTh.voice = voices[0]; saveTtsTh(); }
+    sel.value = state.ttsTh.voice;
+    sel.hidden = false;
+  } else {
+    sel.hidden = true;
+    state.ttsTh.voice = '';
+    saveTtsTh();
+  }
+  note.textContent += (m ? priceText(m, 'tts') + ' คิดตามจำนวนตัวอักษรที่อ่าน ' : '') +
+    (m?.id.startsWith('microsoft/') ? 'โมเดลของ Microsoft มีเสียงไทยโดยเฉพาะ ' : 'ไม่ทุกโมเดลอ่านภาษาไทยได้ดี ให้กดฟังตัวอย่างก่อนใช้ ');
+}
+
+$('#ttsThEngine').addEventListener('change', (e) => {
+  state.ttsTh.engine = e.target.value;
+  if (state.ttsTh.engine === 'openrouter') { unlockAudio(); if (!state.ttsTh.model) state.ttsTh.model = TTS_TH_DEFAULT; }
+  saveTtsTh();
+  renderTtsTh();
+});
+$('#ttsThModelBtn').addEventListener('click', () => openSheet({
+  kind: 'tts',
+  title: 'เลือกโมเดลเสียงภาษาไทย',
+  current: state.ttsTh.model,
+  onPick: (id) => { state.ttsTh.model = id; state.ttsTh.voice = ''; saveTtsTh(); renderTtsTh(); },
+}));
+const TH_SAMPLE = 'สวัสดีครับ ยินดีที่ได้รู้จัก วันนี้อากาศดีมาก';
+$('#ttsThVoice').addEventListener('change', (e) => { state.ttsTh.voice = e.target.value; saveTtsTh(); speakRuns([{ lang: 'th', text: TH_SAMPLE }]); });
+$('#voiceTh').addEventListener('change', (e) => { state.voiceTh = e.target.value; store.set('voiceTh', state.voiceTh); speakRuns([{ lang: 'th', text: TH_SAMPLE }]); });
+$('#voiceTestTh').addEventListener('click', () => speakRuns([{ lang: 'th', text: TH_SAMPLE }]));
+$('#autoRead').checked = state.autoRead;
+$('#autoRead').addEventListener('change', (e) => { state.autoRead = e.target.checked; store.set('autoRead', state.autoRead); });
+if (hasSynth) speechSynthesis.addEventListener?.('voiceschanged', () => { if (state.ttsTh.engine === 'device') renderVoicesTh(); });
+renderTtsTh();
+
 renderTts();
 
 $('#testBtn').addEventListener('click', async () => {
@@ -1780,6 +1961,7 @@ $('#webForm').addEventListener('submit', async (ev) => {
     persist('web');
     drawWeb(entry);
     scrollDown(webLog);
+    if (state.autoRead) speakAnswer(entry.a);
   } catch (err) {
     me.remove();
     ans.remove();
@@ -1823,6 +2005,7 @@ function renderNotes() {
     const acts = el('div', 'acts');
     acts.append(
       actBtn('แก้ไข', () => editNote(c, n)),
+      actBtn('🔊 ฟัง', function () { toggleListen(this, n.text); }),
       actBtn('✨ AI', () => aiNoteMenu(c, n)),
       actBtn(n.pin ? 'เลิกปักหมุด' : 'ปักหมุด', () => { n.pin = !n.pin; persist('notes'); renderNotes(); }),
       actBtn('คัดลอก', function () { copy(n.text, this); }),
@@ -1920,11 +2103,11 @@ $$('#notesSeg button').forEach((b) => b.addEventListener('click', () => {
 
 /* ---------- ส่งออก / นำเข้า ---------- */
 
-const SETTING_KEYS = ['models', 'favs', 'tts', 'stt', 'tone', 'autoSpeak', 'rate', 'pitch', 'autoSend', 'topic', 'mcp', 'noteLang', 'noteAuto'];
+const SETTING_KEYS = ['models', 'favs', 'tts', 'stt', 'ttsTh', 'autoRead', 'tone', 'autoSpeak', 'rate', 'pitch', 'autoSend', 'topic', 'mcp', 'noteLang', 'noteAuto'];
 
 function buildExport(withKey) {
   const settings = {
-    models: state.models, favs: state.favs, tts: state.tts, stt: state.stt, tone: state.tone, autoSpeak: state.autoSpeak,
+    models: state.models, favs: state.favs, tts: state.tts, stt: state.stt, ttsTh: state.ttsTh, autoRead: state.autoRead, tone: state.tone, autoSpeak: state.autoSpeak,
     rate: state.rate, pitch: state.pitch, autoSend: state.autoSend, topic: state.topic, mcp: mcpServers,
     noteLang: state.noteLang, noteAuto: state.noteAuto,
   };
@@ -1959,9 +2142,10 @@ function cleanImport(obj) {
   if (isObj(s.models)) settings.models = Object.fromEntries(Object.entries(s.models).filter(([k, v]) => k in ROLES && typeof v === 'string'));
   if (Array.isArray(s.favs)) settings.favs = s.favs.filter((x) => typeof x === 'string');
   if (isObj(s.tts)) settings.tts = { engine: s.tts.engine === 'openrouter' ? 'openrouter' : 'device', model: String(s.tts.model || ''), voice: String(s.tts.voice || ''), instructions: String(s.tts.instructions || '') };
+  if (isObj(s.ttsTh)) settings.ttsTh = { engine: s.ttsTh.engine === 'openrouter' ? 'openrouter' : 'device', model: String(s.ttsTh.model || ''), voice: String(s.ttsTh.voice || ''), instructions: '' };
   if (isObj(s.stt)) settings.stt = { engine: s.stt.engine === 'openrouter' ? 'openrouter' : 'browser', model: String(s.stt.model || '') };
   if (s.tone in TONES) settings.tone = s.tone;
-  for (const k of ['autoSpeak', 'autoSend', 'noteAuto']) if (typeof s[k] === 'boolean') settings[k] = s[k];
+  for (const k of ['autoSpeak', 'autoSend', 'noteAuto', 'autoRead']) if (typeof s[k] === 'boolean') settings[k] = s[k];
   for (const k of ['rate', 'pitch']) if (typeof s[k] === 'number' && s[k] > 0 && s[k] < 3) settings[k] = s[k];
   if (typeof s.topic === 'string') settings.topic = s.topic;
   if (s.noteLang === 'th-TH' || s.noteLang === 'en-US') settings.noteLang = s.noteLang;
