@@ -183,3 +183,37 @@ main { flex: 1; min-height: 0; position: relative; }
 .card.ask .body table { border-collapse: collapse; font-size: 14px; }
 .card.ask .body th, .card.ask .body td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
 .card.ask .body th { background: var(--accent-soft); }
+
+/* ป้ายโมเดล + หน้าต่างเลือกโมเดล */
+.badge { border: 0; background: var(--accent-soft); color: var(--text); border-radius: 999px; padding: 4px 10px; cursor: pointer; font: inherit; font-size: 12px; max-width: 70%; }
+.pick {
+  display: flex; justify-content: space-between; gap: 8px; width: 100%; text-align: left;
+  font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px 12px; cursor: pointer; word-break: break-all;
+}
+.modelsel { margin-bottom: 6px; }
+.rolename { font-weight: 600; flex: none; }
+.rolemodel { color: var(--muted); font-size: 14px; text-align: right; }
+#sheet { position: fixed; inset: 0; z-index: 20; background: rgba(0, 0, 0, .45); display: flex; align-items: flex-end; justify-content: center; }
+#sheet[hidden], #toast[hidden] { display: none; }
+.sheetbox {
+  width: 100%; max-width: 560px; max-height: 85dvh; display: flex; flex-direction: column; gap: 8px;
+  background: var(--bg); border-radius: 16px 16px 0 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+}
+.sheethead { display: flex; justify-content: space-between; align-items: center; }
+#sheetList { overflow-y: auto; min-height: 120px; }
+.modelrow { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: 10px; background: var(--card); margin-bottom: 6px; }
+.modelrow.cur { border-color: var(--accent); }
+.modelrow .info { flex: 1; min-width: 0; text-align: left; border: 0; background: none; color: var(--text); font: inherit; padding: 8px 10px; cursor: pointer; }
+.mname { font-weight: 600; font-size: 15px; }
+.mid, .mprice { font-size: 12px; color: var(--muted); word-break: break-all; }
+.modelrow .star { border: 0; background: none; color: var(--accent); font-size: 22px; padding: 0 12px; cursor: pointer; }
+.typed { width: 100%; padding: 10px; border: 1px dashed var(--accent); border-radius: 10px; background: none; color: var(--text); font: inherit; cursor: pointer; }
+#toast {
+  position: fixed; left: 16px; right: 16px; bottom: calc(80px + env(safe-area-inset-bottom)); z-index: 30;
+  background: var(--text); color: var(--bg); padding: 10px 14px; border-radius: 10px; font-size: 14px;
+}
+#aiVoice select, #ttsEngine { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; width: 100%; }
+#ttsInstr { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; width: 100%; }
+.sheetbox > * { flex-shrink: 0; }
+.sheetbox > #sheetList { flex: 1 1 auto; min-height: 0; flex-shrink: 1; }

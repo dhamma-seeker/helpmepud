@@ -14,7 +14,6 @@ const store = {
 
 const state = {
   key: store.get('key', ''),
-  model: store.get('model', 'google/gemini-2.5-flash'),
   tone: store.get('tone', 'friendly'),
   autoSpeak: store.get('autoSpeak', true),
   rate: store.get('rate', 0.95),
@@ -24,6 +23,17 @@ const state = {
   dir: 'th-en',
   topic: store.get('topic', 'lang'),
 };
+
+// โมเดลแยกตามงาน: translate = แท็บแชท/เจอหน้า, ask = ถามคำ (ภาษา), topic = หัวข้อ MCP
+const ROLES = { translate: 'แปล', ask: 'ถามคำ', topic: 'หัวข้อ MCP' };
+const DEFAULT_MODEL = 'google/gemini-2.5-flash';
+{
+  const legacy = store.get('model', DEFAULT_MODEL);
+  const saved = store.get('models', {});
+  state.models = { translate: legacy, ask: legacy, topic: legacy, ...saved };
+  state.favs = store.get('favs', []);
+  state.tts = { engine: 'device', model: '', voice: '', instructions: '', ...store.get('tts', {}) };
+}
 
 // ประวัติและที่บันทึก เก็บในเครื่องนี้เท่านั้น
 const db = {
@@ -48,9 +58,9 @@ const TONE_PROMPT = {
 /* ---------- OpenRouter ---------- */
 
 // คืน { content, tool_calls } ; onDelta รับข้อความสะสมถึงปัจจุบัน
-async function llm(messages, onDelta, { tools, signal } = {}) {
+async function llm(messages, onDelta, { tools, signal, role = 'translate' } = {}) {
   if (!state.key) throw new Error('ยังไม่ได้ใส่ OpenRouter API key (ไปที่แท็บตั้งค่า)');
-  const body = { model: state.model, messages, stream: true, temperature: 0.3 };
+  const body = { model: state.models[role], messages, stream: true, temperature: 0.3 };
   if (tools?.length) body.tools = tools;
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -107,7 +117,7 @@ async function runAgent({ messages, tools, callTool, onText, onTool }) {
   const maxRounds = 6;
   for (let round = 0; round < maxRounds; round++) {
     const last = round === maxRounds - 1;
-    const r = await llm(messages, onText, { tools: last ? undefined : tools });
+    const r = await llm(messages, onText, { tools: last ? undefined : tools, role: 'topic' });
     if (!r.tool_calls.length) return r.content;
     messages.push({ role: 'assistant', content: r.content || null, tool_calls: r.tool_calls });
     for (const tc of r.tool_calls) {
@@ -302,10 +312,96 @@ function pickVoice() {
     list.find((v) => v.lang === 'en-US') || list[0];
 }
 
+// เสียง AI ผ่าน OpenRouter (POST /audio/speech) ใช้ element เดียวกันตลอด
+// เพื่อให้ iOS ยอมเล่นเสียงที่เริ่มหลัง await (ปลดล็อกด้วยการแตะครั้งแรก)
+const player = new Audio();
+const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+let playResolve = null;
+let speakSeq = 0;
+const ttsCache = new Map(); // key -> object URL ของเสียงที่เคยสร้างแล้ว เล่นซ้ำไม่เสียเงิน
+
+document.addEventListener('pointerdown', () => {
+  player.src = SILENT_WAV;
+  player.play().then(() => { if (player.src === SILENT_WAV) player.pause(); }).catch(() => {});
+}, { once: true });
+
+function stopSpeech() {
+  speakSeq++;
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  player.pause();
+  playResolve?.();
+  playResolve = null;
+}
+
+let toastTimer;
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), 5000);
+}
+
+async function speakAI(text, seq) {
+  const t = state.tts;
+  const key = [t.model, t.voice, t.instructions, text].join('\u0001');
+  let url = ttsCache.get(key);
+  if (!url) {
+    const body = { model: t.model, input: text, response_format: 'mp3' };
+    if (t.voice) body.voice = t.voice;
+    if (t.instructions.trim()) body.instructions = t.instructions.trim();
+    const res = await fetch('https://openrouter.ai/api/v1/audio/speech', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + state.key,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': location.origin,
+        'X-Title': 'HelpMePud',
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      let msg = 'HTTP ' + res.status;
+      try { const j = await res.json(); msg = j.error?.message || msg; } catch { /* not json */ }
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    url = URL.createObjectURL(blob);
+    ttsCache.set(key, url);
+    if (ttsCache.size > 30) {
+      const oldest = ttsCache.keys().next().value;
+      URL.revokeObjectURL(ttsCache.get(oldest));
+      ttsCache.delete(oldest);
+    }
+  }
+  if (seq !== speakSeq) return; // มีคำสั่งอ่านใหม่แทรกระหว่างรอเสียง
+  await new Promise((resolve, reject) => {
+    playResolve = resolve;
+    player.onended = resolve;
+    player.onerror = () => reject(new Error('เล่นเสียงไม่ได้'));
+    player.src = url;
+    player.playbackRate = 1;
+    player.play().catch(reject);
+  });
+}
+
+// คืน Promise ที่เสร็จเมื่ออ่านจบ (ใช้หยุดไมค์ไม่ให้ได้ยินเสียงตัวเอง)
 function speak(text) {
+  stopSpeech();
+  if (!text) return Promise.resolve();
+  const seq = speakSeq;
+  if (state.tts.engine === 'openrouter' && state.key && state.tts.model) {
+    return speakAI(text, seq).catch((e) => {
+      toast('เสียง AI ใช้ไม่ได้ (' + e.message + ') ใช้เสียงของเครื่องแทน');
+      return seq === speakSeq ? speakDevice(text) : undefined;
+    });
+  }
+  return speakDevice(text);
+}
+
+function speakDevice(text) {
   return new Promise((resolve) => {
-    if (!('speechSynthesis' in window) || !text) return resolve();
-    speechSynthesis.cancel();
+    if (!('speechSynthesis' in window)) return resolve();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = 'en-US';
     u.rate = state.rate;
@@ -644,6 +740,8 @@ async function translate(log, key, src, dir, opts = {}) {
 /* ---------- tabs & tone ---------- */
 
 function showTab(name) {
+  currentTab = name;
+  renderBadge();
   if (name !== 'face') contStop();
   if (name !== 'chat') chatDictateStop();
   if (name !== 'ask') askDictation.stop();
@@ -665,8 +763,169 @@ function renderTones() {
 }
 renderTones();
 
-function renderBadge() { $('#modelBadge').textContent = state.model; }
+/* ---------- รายการโมเดล + หน้าต่างสลับโมเดล ---------- */
+
+let currentTab = 'chat';
+const activeRole = () => (currentTab === 'ask' ? (state.topic === 'lang' ? 'ask' : 'topic') : 'translate');
+const shortName = (id) => id.split('/').slice(1).join('/') || id;
+
+function renderBadge() {
+  const role = activeRole();
+  $('#modelBadge').textContent = ROLES[role] + ' · ' + shortName(state.models[role]) + ' ▾';
+}
+
+const catalog = { text: null, tts: null };
+// โมเดลเสียงที่ส่งกลับเฉพาะ PCM แอปยังเล่นไม่ได้ จึงซ่อนไว้
+const PCM_ONLY = /^(google|heygen)\//;
+
+async function loadCatalog(kind, force = false) {
+  const key = 'cat_' + kind;
+  const cached = store.get(key, null);
+  if (!force && cached && Date.now() - cached.t < 12 * 3600e3) return (catalog[kind] = cached.data);
+  const url = 'https://openrouter.ai/api/v1/models' + (kind === 'tts' ? '?output_modalities=speech' : '');
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const price = (v) => (Number(v) >= 0 ? Number(v) : null); // -1 = ราคาไม่คงที่
+    const data = (await r.json()).data
+      .filter((m) => kind === 'tts'
+        ? !PCM_ONLY.test(m.id)
+        : (m.architecture?.output_modalities || []).includes('text') && (m.architecture?.input_modalities || []).includes('text'))
+      .map((m) => ({
+        id: m.id,
+        name: m.name || m.id,
+        ctx: m.context_length || 0,
+        pin: price(m.pricing?.prompt),
+        pout: price(m.pricing?.completion),
+        tools: (m.supported_parameters || []).includes('tools'),
+        voices: m.supported_voices || null,
+      }));
+    store.set(key, { t: Date.now(), data });
+    return (catalog[kind] = data);
+  } catch (e) {
+    if (cached) return (catalog[kind] = cached.data);
+    throw e;
+  }
+}
+
+const money = (perToken) => {
+  const v = perToken * 1e6;
+  return '$' + (v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toFixed(3));
+};
+
+function priceText(m, kind) {
+  if (m.pin === null || m.pout === null) return 'ราคาไม่คงที่';
+  if (kind === 'tts') {
+    if (m.pin > 0) return money(m.pin) + ' ต่อ 1M ตัวอักษร';
+    if (m.pout > 0) return '$' + m.pout + ' ต่อวินาที';
+    return 'ฟรี';
+  }
+  return m.pin === 0 && m.pout === 0 ? 'ฟรี' : money(m.pin) + ' เข้า / ' + money(m.pout) + ' ออก ต่อ 1M โทเคน';
+}
+
+const sheet = { kind: 'text', filter: 'all', current: '', onPick: null };
+
+function openSheet({ kind, title, current, filter = 'all', onPick }) {
+  Object.assign(sheet, { kind, filter, current, onPick });
+  $('#sheetTitle').textContent = title;
+  $('#sheetSearch').value = '';
+  $('#sheet').hidden = false;
+  renderSheet();
+  if (!catalog[kind]) {
+    $('#sheetList').replaceChildren(el('p', 'note', 'กำลังโหลดรายชื่อโมเดล...'));
+    loadCatalog(kind).then(renderSheet).catch((e) => {
+      $('#sheetList').replaceChildren(el('p', 'note', 'โหลดรายชื่อไม่ได้ (' + e.message + ') พิมพ์ id ของโมเดลในช่องค้นหาแล้วเลือกได้เลย'));
+      renderSheet(true);
+    });
+  }
+}
+
+function closeSheet() { $('#sheet').hidden = true; }
+
+function renderSheet(keepList) {
+  const { kind } = sheet;
+  const chips = kind === 'text'
+    ? [['all', 'ทั้งหมด'], ['fav', '★ ที่ชอบ'], ['tools', '🔧 รองรับเครื่องมือ'], ['free', 'ฟรี']]
+    : [['all', 'ทั้งหมด'], ['fav', '★ ที่ชอบ'], ['free', 'ฟรี']];
+  $('#sheetChips').replaceChildren(...chips.map(([k, label]) => {
+    const b = el('button', 'chip' + (sheet.filter === k ? ' on' : ''), label);
+    b.type = 'button';
+    b.addEventListener('click', () => { sheet.filter = k; renderSheet(); });
+    return b;
+  }));
+  if (keepList === true) { appendTypedRow(); return; }
+  const q = $('#sheetSearch').value.trim().toLowerCase();
+  let list = (catalog[kind] || []).filter((m) => {
+    if (q && !(m.id + ' ' + m.name).toLowerCase().includes(q)) return false;
+    if (sheet.filter === 'fav') return state.favs.includes(m.id);
+    if (sheet.filter === 'tools') return m.tools;
+    if (sheet.filter === 'free') return m.pin === 0 && m.pout === 0;
+    return true;
+  });
+  list.sort((a, b) => (state.favs.includes(b.id) - state.favs.includes(a.id)) || a.name.localeCompare(b.name));
+  const total = list.length;
+  list = list.slice(0, 80);
+  const rows = list.map((m) => {
+    const row = el('div', 'modelrow' + (m.id === sheet.current ? ' cur' : ''));
+    const info = el('button', 'info');
+    info.type = 'button';
+    info.append(
+      el('div', 'mname', m.name),
+      el('div', 'mid', m.id + (m.tools && kind === 'text' ? '  🔧' : '')),
+      el('div', 'mprice', priceText(m, kind) + (kind === 'text' && m.ctx ? ' · ' + Math.round(m.ctx / 1000) + 'K ctx' : '')),
+    );
+    info.addEventListener('click', () => pickModelId(m.id));
+    const star = el('button', 'star', state.favs.includes(m.id) ? '★' : '☆');
+    star.type = 'button';
+    star.setAttribute('aria-label', 'ที่ชอบ');
+    star.addEventListener('click', () => {
+      const i = state.favs.indexOf(m.id);
+      if (i >= 0) state.favs.splice(i, 1); else state.favs.push(m.id);
+      store.set('favs', state.favs);
+      renderSheet();
+    });
+    row.append(info, star);
+    return row;
+  });
+  $('#sheetList').replaceChildren(...rows);
+  if (!rows.length) $('#sheetList').append(el('p', 'note', catalog[kind] ? 'ไม่พบโมเดลที่ตรงกับตัวกรอง' : ''));
+  if (total > list.length) $('#sheetList').append(el('p', 'note', `แสดง ${list.length} จาก ${total} รายการ พิมพ์ค้นหาเพื่อกรองเพิ่ม`));
+  appendTypedRow();
+}
+
+// พิมพ์ id เองได้ (กรณีโมเดลใหม่ที่ยังไม่อยู่ในรายการ)
+function appendTypedRow() {
+  const q = $('#sheetSearch').value.trim();
+  if (!/^[\w.-]+\/[\w.:-]+$/.test(q) || (catalog[sheet.kind] || []).some((m) => m.id === q)) return;
+  const b = el('button', 'typed', 'ใช้ id ที่พิมพ์: ' + q);
+  b.type = 'button';
+  b.addEventListener('click', () => pickModelId(q));
+  $('#sheetList').append(b);
+}
+
+function pickModelId(id) { closeSheet(); sheet.onPick?.(id); }
+
+$('#sheetSearch').addEventListener('input', () => renderSheet());
+$('#sheetClose').addEventListener('click', closeSheet);
+$('#sheet').addEventListener('click', (e) => { if (e.target.id === 'sheet') closeSheet(); });
+
+function pickTextModel(role) {
+  openSheet({
+    kind: 'text',
+    title: 'เลือกโมเดล: ' + ROLES[role],
+    current: state.models[role],
+    filter: role === 'topic' ? 'tools' : 'all',
+    onPick: (id) => {
+      state.models[role] = id;
+      store.set('models', state.models);
+      renderBadge();
+      renderModelRows?.();
+    },
+  });
+}
+$('#modelBadge').addEventListener('click', () => pickTextModel(activeRole()));
 renderBadge();
+loadCatalog('text').catch(() => {}); // โหลดล่วงหน้า ให้หน้าต่างเลือกโมเดลเปิดเร็ว
 
 function autosubmit(input, form) {
   input.addEventListener('keydown', (e) => {
@@ -854,7 +1113,7 @@ function renderTopics() {
   $('#topics').replaceChildren(...topicList().map((t) => {
     const b = el('button', 'chip' + (t.id === state.topic ? ' on' : ''), t.label);
     b.type = 'button';
-    b.addEventListener('click', () => { state.topic = t.id; store.set('topic', t.id); renderTopics(); renderAsk(); });
+    b.addEventListener('click', () => { state.topic = t.id; store.set('topic', t.id); renderBadge(); renderTopics(); renderAsk(); });
     return b;
   }));
   $('#askInput').placeholder = state.topic === 'lang' ? 'ถามเรื่องคำหรือสำนวน...' : 'ถามเรื่อง' + (currentServer()?.name || '') + '...';
@@ -929,7 +1188,7 @@ $('#askForm').addEventListener('submit', async (e) => {
     let answer;
     if (!srv) {
       const r = await llm([{ role: 'system', content: ASK_PROMPT }, ...history, { role: 'user', content: q }],
-        (t) => { body.innerHTML = md(t); scrollDown(askLog); });
+        (t) => { body.innerHTML = md(t); scrollDown(askLog); }, { role: 'ask' });
       answer = r.content;
     } else {
       const client = clientFor(srv);
@@ -984,17 +1243,23 @@ $('#askClear').addEventListener('click', () => confirmClear('บทสนทน�
 /* ---------- settings ---------- */
 
 $('#apiKey').value = state.key;
-$('#model').value = state.model;
 $('#autoSpeak').checked = state.autoSpeak;
 $('#rate').value = state.rate;
 $('#rateVal').textContent = state.rate;
 
 $('#apiKey').addEventListener('input', (e) => { state.key = e.target.value.trim(); store.set('key', state.key); });
-$('#model').addEventListener('input', (e) => {
-  state.model = e.target.value.trim() || 'google/gemini-2.5-flash';
-  store.set('model', state.model);
-  renderBadge();
-});
+function renderModelRows() {
+  $('#modelRows').replaceChildren(...Object.entries(ROLES).map(([role, label]) => {
+    const row = el('div', 'modelsel');
+    const b = el('button', 'pick');
+    b.type = 'button';
+    b.append(el('span', 'rolename', label), el('span', 'rolemodel', state.models[role]));
+    b.addEventListener('click', () => pickTextModel(role));
+    row.append(b);
+    return row;
+  }));
+}
+renderModelRows();
 $('#autoSpeak').addEventListener('change', (e) => { state.autoSpeak = e.target.checked; store.set('autoSpeak', state.autoSpeak); });
 $('#rate').addEventListener('input', (e) => {
   state.rate = Number(e.target.value);
@@ -1027,6 +1292,76 @@ $('#pitch').addEventListener('input', (e) => {
   store.set('pitch', state.pitch);
 });
 $('#voiceTest').addEventListener('click', () => speak('Hi, nice to meet you. How is your day going?'));
+
+/* ---------- เสียง AI (OpenRouter TTS) ---------- */
+
+const TTS_DEFAULT = 'hexgrad/kokoro-82m';
+const KOKORO_GROUP = { af: 'หญิง US', am: 'ชาย US', bf: 'หญิง UK', bm: 'ชาย UK' };
+
+// ตัดเสียงภาษาอื่นออก ให้เหลือเสียงอังกฤษ (บางโมเดลมีเป็นร้อยเสียง)
+function voiceFilter(modelId) {
+  if (modelId.startsWith('hexgrad/kokoro')) return (v) => /^[ab][fm]_/.test(v);
+  if (modelId.startsWith('mistralai/')) return (v) => /^en_/.test(v);
+  if (modelId.startsWith('minimax/')) return (v) => /^English/i.test(v);
+  if (modelId.startsWith('microsoft/')) return (v) => /^en-/.test(v);
+  return () => true;
+}
+
+function voiceLabel(modelId, v) {
+  if (modelId.startsWith('hexgrad/kokoro')) {
+    const g = KOKORO_GROUP[v.slice(0, 2)];
+    return g ? `${v.slice(3)} (${g})` : v;
+  }
+  return v.replace(/:MAI-Voice.*$/, '');
+}
+
+function saveTts() { store.set('tts', state.tts); }
+
+async function renderTts() {
+  const ai = state.tts.engine === 'openrouter';
+  $('#ttsEngine').value = state.tts.engine;
+  $('#deviceVoice').hidden = ai;
+  $('#aiVoice').hidden = !ai;
+  if (!ai) return;
+  $('#ttsModelBtn').textContent = state.tts.model || 'เลือกโมเดลเสียง';
+  $('#ttsInstr').value = state.tts.instructions;
+  const sel = $('#ttsVoice');
+  const note = $('#ttsNote');
+  note.textContent = state.key ? '' : 'ยังไม่ได้ใส่ OpenRouter API key เสียงจะใช้เสียงของเครื่องแทน';
+  try { await loadCatalog('tts'); } catch { /* ใช้โมเดลที่พิมพ์เองได้ */ }
+  const m = (catalog.tts || []).find((x) => x.id === state.tts.model);
+  if (m?.voices?.length) {
+    let voices = m.voices.filter(voiceFilter(m.id));
+    if (!voices.length) voices = m.voices;
+    sel.replaceChildren(...voices.map((v) => { const o = el('option', '', voiceLabel(m.id, v)); o.value = v; return o; }));
+    if (!voices.includes(state.tts.voice)) { state.tts.voice = voices[0]; saveTts(); }
+    sel.value = state.tts.voice;
+    sel.hidden = false;
+  } else {
+    sel.hidden = true;
+    state.tts.voice = '';
+    saveTts();
+  }
+  note.textContent += (m ? priceText(m, 'tts') + ' คิดตามจำนวนตัวอักษรที่อ่าน ' : '') +
+    (m?.id.startsWith('hexgrad/kokoro') ? 'ชื่อเสียงมีกลุ่มเพศ/สำเนียงกำกับ ' : 'ระบบไม่ระบุเพศของเสียง ให้กดฟังตัวอย่างเอง ') +
+    'ผมซ่อนโมเดลที่ส่งเสียงแบบ PCM เพราะแอปยังเล่นไม่ได้';
+}
+
+$('#ttsEngine').addEventListener('change', (e) => {
+  state.tts.engine = e.target.value;
+  if (state.tts.engine === 'openrouter' && !state.tts.model) state.tts.model = TTS_DEFAULT;
+  saveTts();
+  renderTts();
+});
+$('#ttsModelBtn').addEventListener('click', () => openSheet({
+  kind: 'tts',
+  title: 'เลือกโมเดลเสียง',
+  current: state.tts.model,
+  onPick: (id) => { state.tts.model = id; state.tts.voice = ''; saveTts(); renderTts(); },
+}));
+$('#ttsVoice').addEventListener('change', (e) => { state.tts.voice = e.target.value; saveTts(); speak('Nice to meet you.'); });
+$('#ttsInstr').addEventListener('input', (e) => { state.tts.instructions = e.target.value; saveTts(); });
+renderTts();
 
 $('#testBtn').addEventListener('click', async () => {
   const out = $('#testResult');

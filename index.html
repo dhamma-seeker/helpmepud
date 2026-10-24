@@ -18,7 +18,7 @@
 <body>
 <header class="top">
   <h1>HelpMePud</h1>
-  <span id="modelBadge" class="badge"></span>
+  <button id="modelBadge" class="badge" type="button" aria-label="เปลี่ยนโมเดล"></button>
 </header>
 
 <main>
@@ -91,31 +91,43 @@
       <input id="apiKey" type="password" placeholder="sk-or-..." autocomplete="off" autocapitalize="off" spellcheck="false">
       <p class="note">key เก็บไว้ในเครื่องนี้เท่านั้น (localStorage) และถูกส่งไปที่ openrouter.ai โดยตรง ไม่ผ่านเซิร์ฟเวอร์อื่น แต่ละอุปกรณ์ต้องใส่เอง</p>
 
-      <label for="model">โมเดล</label>
-      <input id="model" list="models" placeholder="google/gemini-2.5-flash" autocapitalize="off" spellcheck="false">
-      <datalist id="models">
-        <option value="google/gemini-2.5-flash"></option>
-        <option value="google/gemini-2.5-pro"></option>
-        <option value="openai/gpt-4o-mini"></option>
-        <option value="openai/gpt-4o"></option>
-        <option value="anthropic/claude-3.5-haiku"></option>
-        <option value="anthropic/claude-sonnet-4.5"></option>
-      </datalist>
-      <p class="note">พิมพ์ model id ตามหน้า openrouter.ai/models ได้เลย หัวข้อที่ใช้ MCP ต้องใช้โมเดลที่รองรับ tool calling</p>
+      <label>โมเดล AI</label>
+      <div id="modelRows"></div>
+      <p class="note">แยกโมเดลตามงานได้ เช่นแปลใช้ตัวเร็วและถูก ส่วนหัวข้อ MCP ต้องเป็นโมเดลที่รองรับเครื่องมือ กดชื่อโมเดลที่มุมขวาบนของแอปเพื่อสลับได้จากทุกหน้า รายชื่อโมเดลดึงสดจาก OpenRouter</p>
 
       <label class="row"><input type="checkbox" id="autoSpeak"> อ่านคำแปลอังกฤษออกเสียงอัตโนมัติ (แท็บเจอหน้า)</label>
 
       <label for="rate">ความเร็วเสียงอ่าน <span id="rateVal"></span></label>
       <input id="rate" type="range" min="0.6" max="1.3" step="0.05">
 
-      <label for="voice">เสียงอ่านภาษาอังกฤษ</label>
-      <select id="voice"></select>
-      <label for="pitch">ระดับเสียง <span id="pitchVal"></span></label>
-      <input id="pitch" type="range" min="0.5" max="1.5" step="0.05">
+      <label for="ttsEngine">เสียงอ่านภาษาอังกฤษ</label>
+      <select id="ttsEngine">
+        <option value="device">เสียงของเครื่อง (ฟรี)</option>
+        <option value="openrouter">เสียง AI ผ่าน OpenRouter (เสียเงินตามตัวอักษร)</option>
+      </select>
+
+      <div id="deviceVoice">
+        <label for="voice">เสียงของเครื่อง</label>
+        <select id="voice"></select>
+        <label for="pitch">ระดับเสียง <span id="pitchVal"></span></label>
+        <input id="pitch" type="range" min="0.5" max="1.5" step="0.05">
+        <p class="note">รายการเสียงขึ้นกับเครื่องที่ใช้ (iPhone, Android และคอมพิวเตอร์มีชุดเสียงต่างกัน) ระบบไม่บอกเพศของเสียง ให้กดฟังตัวอย่างแล้วเลือกเอง</p>
+      </div>
+
+      <div id="aiVoice" hidden>
+        <label>โมเดลเสียง</label>
+        <button id="ttsModelBtn" type="button" class="pick"></button>
+        <label for="ttsVoice">เสียง</label>
+        <select id="ttsVoice"></select>
+        <label for="ttsInstr">โทนการพูด (ไม่ทุกโมเดลรองรับ)</label>
+        <input id="ttsInstr" type="text" placeholder="เช่น warm, friendly, speak slowly" autocapitalize="off">
+        <p class="note" id="ttsNote"></p>
+      </div>
+
       <div class="btnrow">
         <button id="voiceTest" type="button">🔊 ฟังตัวอย่าง</button>
       </div>
-      <p class="note">รายการเสียงขึ้นกับเครื่องที่ใช้ (iPhone, Android และคอมพิวเตอร์มีชุดเสียงต่างกัน) ระบบไม่บอกเพศของเสียง ให้กดฟังตัวอย่างแล้วเลือกเอง การตั้งค่านี้จำแยกตามอุปกรณ์</p>
+      <p class="note">การตั้งค่าเสียงจำแยกตามอุปกรณ์ เสียง AI จะเล่นซ้ำจากแคชโดยไม่เสียเงินเพิ่มเมื่อกดฟังประโยคเดิม</p>
 
       <label>MCP server (หัวข้อในแท็บถามคำ)</label>
       <div id="mcpList"></div>
@@ -144,6 +156,15 @@
   <button data-tab="settings"><span>⚙️</span>ตั้งค่า</button>
 </nav>
 
+<div id="sheet" hidden>
+  <div class="sheetbox" role="dialog" aria-modal="true">
+    <div class="sheethead"><strong id="sheetTitle"></strong><button id="sheetClose" type="button" class="link">ปิด</button></div>
+    <input id="sheetSearch" type="search" class="search" placeholder="ค้นหา หรือพิมพ์ id เช่น openai/gpt-4o-mini" autocapitalize="off" spellcheck="false">
+    <div class="chips" id="sheetChips"></div>
+    <div id="sheetList"></div>
+  </div>
+</div>
+<div id="toast" hidden></div>
 <div id="big" hidden></div>
 <script src="app.js"></script>
 </body>
