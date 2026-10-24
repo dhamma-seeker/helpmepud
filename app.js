@@ -352,6 +352,41 @@ function listen(lang, btn, onText) {
   try { rec.start(); } catch { activeRec = null; btn.classList.remove('rec'); btn.textContent = label; }
 }
 
+// พูดแทนการพิมพ์: ข้อความที่ได้ยินลงในช่องพิมพ์ ต่อท้ายข้อความเดิม ให้แก้ก่อนส่งได้
+function makeDictation({ input, btn, lang, onDone }) {
+  let rec = null;
+  const reset = () => { rec = null; btn.classList.remove('rec'); btn.textContent = '🎤'; };
+  const stop = () => { try { rec?.stop(); } catch { /* stopped */ } };
+  const toggle = () => {
+    if (rec) { stop(); return; }
+    if (activeRec) activeRec.abort();
+    const base = input.value.trim();
+    const r = new SR();
+    r.lang = lang();
+    r.interimResults = true;
+    r.continuous = false;
+    let heard = '';
+    r.onresult = (e) => {
+      heard = '';
+      for (const x of e.results) heard += x[0].transcript;
+      input.value = (base ? base + ' ' : '') + heard.trim();
+    };
+    r.onerror = (e) => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') alert('ต้องอนุญาตการใช้ไมโครโฟนก่อน');
+    };
+    r.onend = () => {
+      reset();
+      input.focus({ preventScroll: true });
+      if (heard.trim()) onDone?.();
+    };
+    rec = r;
+    btn.classList.add('rec');
+    btn.textContent = '■';
+    try { r.start(); } catch { reset(); }
+  };
+  return { toggle, stop };
+}
+
 /* ---------- UI helpers ---------- */
 
 function el(tag, cls, text) {
@@ -522,6 +557,7 @@ async function translate(log, key, src, dir, opts = {}) {
 function showTab(name) {
   if (name !== 'face') contStop();
   if (name !== 'chat') chatDictateStop();
+  if (name !== 'ask') askDictation.stop();
   $$('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + name));
   $$('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === name));
   if (name === 'saved') renderSaved();
@@ -581,45 +617,16 @@ $('#chatForm').addEventListener('submit', async (e) => {
 autosubmit($('#chatInput'), $('#chatForm'));
 
 // พูดแทนการพิมพ์: ข้อความที่ได้ยินลงในช่องพิมพ์ ให้แก้ก่อนส่งได้ (หรือเปิดส่งอัตโนมัติ)
-let chatRec = null;
-
-function chatDictateStop() { try { chatRec?.stop(); } catch { /* stopped */ } }
-
-function chatDictate() {
-  if (chatRec) { chatDictateStop(); return; }
-  if (activeRec) activeRec.abort();
-  const input = $('#chatInput');
-  const btn = $('#chatMic');
-  const base = input.value.trim();
-  const rec = new SR();
-  rec.lang = state.dir === 'th-en' ? 'th-TH' : 'en-US';
-  rec.interimResults = true;
-  rec.continuous = false;
-  let heard = '';
-  const join = (t) => (base ? base + ' ' : '') + t;
-  rec.onresult = (e) => {
-    heard = '';
-    for (const r of e.results) heard += r[0].transcript;
-    input.value = join(heard.trim());
-  };
-  rec.onerror = (e) => {
-    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') alert('ต้องอนุญาตการใช้ไมโครโฟนก่อน');
-  };
-  rec.onend = () => {
-    chatRec = null;
-    btn.classList.remove('rec');
-    btn.textContent = '🎤';
-    input.focus({ preventScroll: true });
-    if (heard.trim() && state.autoSend) $('#chatForm').requestSubmit();
-  };
-  chatRec = rec;
-  btn.classList.add('rec');
-  btn.textContent = '■';
-  try { rec.start(); } catch { chatRec = null; btn.classList.remove('rec'); btn.textContent = '🎤'; }
-}
+const chatDictation = makeDictation({
+  input: $('#chatInput'),
+  btn: $('#chatMic'),
+  lang: () => (state.dir === 'th-en' ? 'th-TH' : 'en-US'),
+  onDone: () => { if (state.autoSend) $('#chatForm').requestSubmit(); },
+});
+function chatDictateStop() { chatDictation.stop(); }
 
 if (SR) {
-  $('#chatMic').addEventListener('click', chatDictate);
+  $('#chatMic').addEventListener('click', chatDictation.toggle);
   $('#autoSend').checked = state.autoSend;
   $('#autoSend').addEventListener('change', (e) => { state.autoSend = e.target.checked; store.set('autoSend', state.autoSend); });
 } else {
@@ -874,6 +881,10 @@ $('#askForm').addEventListener('submit', async (e) => {
   btn.disabled = false;
 });
 autosubmit($('#askInput'), $('#askForm'));
+
+const askDictation = makeDictation({ input: $('#askInput'), btn: $('#askMic'), lang: () => 'th-TH' });
+if (SR) $('#askMic').addEventListener('click', askDictation.toggle);
+else $('#askMic').hidden = true;
 
 $('#askClear').addEventListener('click', () => confirmClear('บทสนทนาของหัวข้อนี้', () => {
   db.ask[state.topic] = [];
