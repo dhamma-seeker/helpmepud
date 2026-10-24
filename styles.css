@@ -160,3 +160,26 @@ main { flex: 1; min-height: 0; position: relative; }
 .micbtn.rec { background: var(--danger); color: #fff; border-color: transparent; animation: pulse 1.1s infinite; }
 .chatopts { display: flex; align-items: center; justify-content: space-between; font-size: 14px; color: var(--muted); }
 .chatopts label { display: flex; align-items: center; gap: 6px; }
+
+/* markdown ในคำตอบ */
+.card.ask .body { white-space: normal; }
+.card.ask.me .body { white-space: pre-wrap; }
+.card.ask .body > :first-child { margin-top: 0; }
+.card.ask .body > :last-child { margin-bottom: 0; }
+.card.ask .body p { margin: 0 0 8px; }
+.card.ask .body h3, .card.ask .body h4, .card.ask .body h5, .card.ask .body h6 { margin: 12px 0 4px; line-height: 1.3; }
+.card.ask .body h3 { font-size: 18px; }
+.card.ask .body h4 { font-size: 16px; }
+.card.ask .body h5, .card.ask .body h6 { font-size: 15px; }
+.card.ask .body ul, .card.ask .body ol { margin: 0 0 8px; padding-left: 22px; }
+.card.ask .body li { margin: 2px 0; }
+.card.ask .body li > ul, .card.ask .body li > ol { margin: 2px 0; }
+.card.ask .body code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--accent-soft); border-radius: 4px; padding: 1px 5px; }
+.card.ask .body pre { margin: 0 0 8px; padding: 10px; background: var(--accent-soft); border-radius: 8px; overflow-x: auto; }
+.card.ask .body pre code { background: none; padding: 0; font-size: 13px; white-space: pre; }
+.card.ask .body blockquote { margin: 0 0 8px; padding: 2px 0 2px 10px; border-left: 3px solid var(--accent); color: var(--muted); }
+.card.ask .body hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
+.card.ask .body .tbl { overflow-x: auto; margin: 0 0 8px; }
+.card.ask .body table { border-collapse: collapse; font-size: 14px; }
+.card.ask .body th, .card.ask .body td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+.card.ask .body th { background: var(--accent-soft); }

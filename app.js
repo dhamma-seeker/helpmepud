@@ -433,12 +433,101 @@ function errCard(log, e) {
   scrollDown(log);
 }
 
-// markdown แบบย่อ: escape ทุกอย่างก่อน แล้วเปิดเฉพาะลิงก์ http(s) กับตัวหนา
+// markdown ที่โมเดลมักใช้: หัวข้อ รายการ (ซ้อนได้) ตาราง โค้ด คำพูดอ้างอิง ตัวหนา/เอียง ลิงก์
+// escape ข้อความทุกส่วนก่อนสร้าง HTML และเปิดลิงก์เฉพาะ http(s)
+const escHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+function mdInline(raw) {
+  const codes = [];
+  let s = escHtml(raw).replace(/`([^`\n]+)`/g, (_, c) => { codes.push(c); return '\u0000' + (codes.length - 1) + '\u0000'; });
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/g, (m, label, url, bare) => {
+    if (bare) {
+      const tail = bare.match(/[.,;:!?)]+$/)?.[0] || '';
+      const u = bare.slice(0, bare.length - tail.length);
+      return `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>${tail}`;
+    }
+    return `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  });
+  s = s
+    .replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^A-Za-z0-9_])__([^_\n]+?)__(?![A-Za-z0-9_])/g, '$1<strong>$2</strong>')
+    .replace(/(^|[\s(])\*([^*\s][^*\n]*?)\*(?=$|[\s).,;:!?])/g, '$1<em>$2</em>');
+  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[i]}</code>`);
+}
+
+function mdList(lines) {
+  let html = '';
+  const stack = []; // { indent, tag }
+  const close = () => { html += `</li></${stack.pop().tag}>`; };
+  for (const l of lines) {
+    const m = l.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
+    const indent = m[1].replace(/\t/g, '    ').length;
+    const tag = /\d/.test(m[2]) ? 'ol' : 'ul';
+    while (stack.length && indent < stack[stack.length - 1].indent) close();
+    const top = stack[stack.length - 1];
+    if (top && indent === top.indent) html += '</li>';
+    else if (!top || indent > top.indent) { html += `<${tag}>`; stack.push({ indent, tag }); }
+    html += `<li>${mdInline(m[3])}`;
+  }
+  while (stack.length) close();
+  return html;
+}
+
+function mdTable(lines) {
+  const cells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+  const head = cells(lines[0]);
+  const rows = lines.slice(2).map(cells);
+  return '<div class="tbl"><table><thead><tr>' + head.map((c) => `<th>${mdInline(c)}</th>`).join('') + '</tr></thead><tbody>' +
+    rows.map((r) => '<tr>' + r.map((c) => `<td>${mdInline(c)}</td>`).join('') + '</tr>').join('') + '</tbody></table></div>';
+}
+
 function md(text) {
-  const h = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  return h
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  const blocks = [];
+  // โค้ดบล็อกแยกออกก่อน เพื่อไม่ให้ตีความ markdown ข้างใน (รวมบล็อกที่ยังไม่ปิดตอนสตรีม)
+  const src = text.replace(/\r\n/g, '\n').replace(/```[^\n]*\n([\s\S]*?)(```|$)/g, (_, code) => {
+    blocks.push(`<pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre>`);
+    return '\n\u0001' + (blocks.length - 1) + '\u0001\n';
+  });
+  const lines = src.split('\n');
+  const out = [];
+  const isItem = (l) => /^\s*([-*+]|\d+[.)])\s+\S/.test(l);
+  const isRow = (l) => /^\s*\|.*\|\s*$/.test(l);
+  for (let i = 0; i < lines.length;) {
+    const l = lines[i];
+    let m;
+    if (!l.trim()) { i++; continue; }
+    if ((m = l.match(/^\u0001(\d+)\u0001$/))) { out.push(blocks[m[1]]); i++; continue; }
+    if ((m = l.match(/^\s{0,3}(#{1,6})\s+(.*)$/))) {
+      const n = Math.min(m[1].length + 2, 6); // # ใหญ่สุดที่ h3 ให้พอดีกับการ์ด
+      out.push(`<h${n}>${mdInline(m[2].replace(/\s#+\s*$/, ''))}</h${n}>`); i++; continue;
+    }
+    if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(l)) { out.push('<hr>'); i++; continue; }
+    if (/^\s*>/.test(l)) {
+      const q = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) q.push(lines[i++].replace(/^\s*>\s?/, ''));
+      out.push(`<blockquote>${q.map(mdInline).join('<br>')}</blockquote>`); continue;
+    }
+    if (isRow(l) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1])) {
+      const t = [];
+      while (i < lines.length && isRow(lines[i])) t.push(lines[i++]);
+      out.push(mdTable(t)); continue;
+    }
+    if (isItem(l)) {
+      const li = [];
+      while (i < lines.length && lines[i].trim() && (isItem(lines[i]) || /^\s{2,}\S/.test(lines[i]))) {
+        if (isItem(lines[i])) li.push(lines[i]);
+        else li[li.length - 1] += ' ' + lines[i].trim(); // บรรทัดต่อของข้อความในรายการ
+        i++;
+      }
+      out.push(mdList(li)); continue;
+    }
+    const p = [];
+    while (i < lines.length && lines[i].trim() && !/^\u0001\d+\u0001$/.test(lines[i]) && !isItem(lines[i]) &&
+           !/^\s{0,3}#{1,6}\s/.test(lines[i]) && !/^\s*>/.test(lines[i])) p.push(lines[i++]);
+    if (!p.length) { p.push(lines[i++]); }
+    out.push(`<p>${p.map(mdInline).join('<br>')}</p>`);
+  }
+  return out.join('');
 }
 
 /* ---------- saved phrases ---------- */
