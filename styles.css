@@ -122,3 +122,33 @@ main { flex: 1; min-height: 0; position: relative; }
   padding: 24px; font-size: clamp(32px, 9vw, 72px); font-weight: 700; line-height: 1.25;
 }
 #big[hidden] { display: none; }
+
+/* ประวัติ / MCP / ฟังต่อเนื่อง */
+.chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.chip {
+  flex: none; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--card); color: var(--text); font: inherit; font-size: 14px; cursor: pointer;
+}
+.chip.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.tools { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+.tools:empty { display: none; }
+.tool { font-size: 12px; color: var(--muted); background: var(--accent-soft); border-radius: 6px; padding: 1px 8px; }
+.card a { color: var(--accent); word-break: break-all; }
+.card.ask .body strong { font-weight: 700; }
+.search {
+  font: inherit; color: var(--text); background: var(--card); width: 100%;
+  border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+}
+.contbox { display: flex; flex-direction: column; gap: 6px; }
+.mic.cont { padding: 12px 8px; }
+.mic:disabled { opacity: .45; }
+#contStatus { min-height: 1.4em; margin: 0; }
+.mcprow { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; background: var(--card); }
+.mcprow .row { font-weight: 600; }
+.mcpadd { display: flex; flex-direction: column; gap: 6px; }
+.mcpadd input {
+  font: inherit; color: var(--text); background: var(--card);
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; width: 100%;
+}
+.mcpadd button { padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--text); font: inherit; }
+.tabs button span { font-size: 19px; }

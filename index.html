@@ -29,20 +29,25 @@
       <button data-dir="en-th">อังกฤษ → ไทย</button>
     </div>
     <div class="seg small tone-seg"></div>
-    <div id="chatLog" class="log">
-      <p class="empty">พิมพ์ไทยเพื่อแปลเป็นอังกฤษไปตอบเพื่อน หรือสลับเป็น "อังกฤษ → ไทย" แล้ววางข้อความของเพื่อนเพื่อให้แปลให้อ่าน</p>
-    </div>
+    <div id="chatLog" class="log"></div>
     <form class="composer" id="chatForm">
-      <textarea id="chatInput" rows="2" placeholder="พิมพ์ข้อความ..."></textarea>
+      <textarea id="chatInput" rows="2" placeholder="พิมพ์ภาษาไทย..."></textarea>
       <button type="submit" class="send" aria-label="ส่ง">ส่ง</button>
     </form>
+    <button id="chatClear" class="link" type="button">ล้างประวัติ</button>
   </section>
 
   <!-- เจอหน้า -->
   <section id="tab-face" class="tab">
     <div class="seg small tone-seg"></div>
-    <div id="faceLog" class="log">
-      <p class="empty">กดไมค์ พูดไทย แล้วแอปจะแปลเป็นอังกฤษและอ่านออกเสียงให้ เมื่อเพื่อนตอบ กดไมค์ฝั่งเพื่อนเพื่อแปลกลับเป็นไทย</p>
+    <div id="faceLog" class="log"></div>
+    <div id="contBox" class="contbox">
+      <div class="seg small" id="contLang">
+        <button data-lang="th-TH" class="on">ฟังฝั่งผม (ไทย)</button>
+        <button data-lang="en-US">ฟังฝั่งเพื่อน (EN)</button>
+      </div>
+      <button id="contBtn" class="mic cont" type="button">▶ ฟังต่อเนื่อง</button>
+      <p id="contStatus" class="note"></p>
     </div>
     <p id="micNote" class="note" hidden>เบราว์เซอร์นี้ไม่รองรับการฟังเสียง ใช้ปุ่มไมค์บนคีย์บอร์ดของมือถือแทนได้</p>
     <div class="mics">
@@ -53,18 +58,25 @@
       <input id="faceInput" type="text" placeholder="หรือพิมพ์ไทยตรงนี้" autocomplete="off">
       <button type="submit" class="send">แปล</button>
     </form>
+    <button id="faceClear" class="link" type="button">ล้างประวัติ</button>
   </section>
 
-  <!-- ถามคำศัพท์ -->
+  <!-- ถามคำ / ธรรมะ -->
   <section id="tab-ask" class="tab">
-    <div id="askLog" class="log">
-      <p class="empty">ถามได้เลย เช่น "ถ้าอยากปฏิเสธคำชวนแบบสุภาพ พูดว่าอะไรดี" หรือ "คำว่า เกรงใจ ภาษาอังกฤษใช้คำไหน"</p>
-    </div>
+    <div class="chips" id="topics"></div>
+    <p id="topicStatus" class="note"></p>
+    <div id="askLog" class="log"></div>
     <form class="composer" id="askForm">
       <textarea id="askInput" rows="2" placeholder="ถามเรื่องคำหรือสำนวน..."></textarea>
       <button type="submit" class="send">ถาม</button>
     </form>
-    <button id="askClear" class="link" type="button">เริ่มบทสนทนาใหม่</button>
+    <button id="askClear" class="link" type="button">ล้างบทสนทนาหัวข้อนี้</button>
+  </section>
+
+  <!-- ที่บันทึก -->
+  <section id="tab-saved" class="tab">
+    <input id="savedSearch" type="search" class="search" placeholder="ค้นหาประโยคที่บันทึกไว้">
+    <div id="savedLog" class="log"></div>
   </section>
 
   <!-- ตั้งค่า -->
@@ -84,12 +96,21 @@
         <option value="anthropic/claude-3.5-haiku"></option>
         <option value="anthropic/claude-sonnet-4.5"></option>
       </datalist>
-      <p class="note">พิมพ์ model id ตามหน้า openrouter.ai/models ได้เลย</p>
+      <p class="note">พิมพ์ model id ตามหน้า openrouter.ai/models ได้เลย หัวข้อที่ใช้ MCP ต้องใช้โมเดลที่รองรับ tool calling</p>
 
       <label class="row"><input type="checkbox" id="autoSpeak"> อ่านคำแปลอังกฤษออกเสียงอัตโนมัติ (แท็บเจอหน้า)</label>
 
       <label for="rate">ความเร็วเสียงอ่าน <span id="rateVal"></span></label>
       <input id="rate" type="range" min="0.6" max="1.3" step="0.05">
+
+      <label>MCP server (หัวข้อในแท็บถามคำ)</label>
+      <div id="mcpList"></div>
+      <form id="mcpForm" class="mcpadd">
+        <input id="mcpName" type="text" placeholder="ชื่อหัวข้อ เช่น ธรรมะ" required>
+        <input id="mcpUrl" type="url" placeholder="https://.../mcp" required autocapitalize="off">
+        <button type="submit">เพิ่ม</button>
+      </form>
+      <p class="note">รองรับ MCP แบบ Streamable HTTP ที่ไม่ต้องล็อกอิน และเซิร์ฟเวอร์ต้องเปิด CORS ให้เว็บเรียกได้</p>
 
       <div class="btnrow">
         <button id="testBtn" type="button">ทดสอบการเชื่อมต่อ</button>
@@ -105,6 +126,7 @@
   <button data-tab="chat" class="on"><span>💬</span>แชท</button>
   <button data-tab="face"><span>🗣️</span>เจอหน้า</button>
   <button data-tab="ask"><span>❓</span>ถามคำ</button>
+  <button data-tab="saved"><span>⭐</span>บันทึก</button>
   <button data-tab="settings"><span>⚙️</span>ตั้งค่า</button>
 </nav>
 
