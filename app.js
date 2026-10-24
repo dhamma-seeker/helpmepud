@@ -18,6 +18,8 @@ const state = {
   tone: store.get('tone', 'friendly'),
   autoSpeak: store.get('autoSpeak', true),
   rate: store.get('rate', 0.95),
+  pitch: store.get('pitch', 1),
+  voice: store.get('voice', ''), // voiceURI ของเสียงที่เลือก ว่าง = เลือกให้อัตโนมัติ
   dir: 'th-en',
   topic: store.get('topic', 'lang'),
 };
@@ -291,6 +293,14 @@ function parseLabeled(text) {
 /* ---------- speech ---------- */
 
 // คืน Promise ที่เสร็จเมื่ออ่านจบ (ใช้หยุดไมค์ไม่ให้ได้ยินเสียงตัวเอง)
+const enVoices = () => speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith('en'));
+
+function pickVoice() {
+  const list = enVoices();
+  return list.find((v) => v.voiceURI === state.voice) ||
+    list.find((v) => v.lang === 'en-US') || list[0];
+}
+
 function speak(text) {
   return new Promise((resolve) => {
     if (!('speechSynthesis' in window) || !text) return resolve();
@@ -298,9 +308,9 @@ function speak(text) {
     const u = new SpeechSynthesisUtterance(text);
     u.lang = 'en-US';
     u.rate = state.rate;
-    const voices = speechSynthesis.getVoices();
-    const v = voices.find((x) => x.lang === 'en-US') || voices.find((x) => x.lang.startsWith('en'));
-    if (v) u.voice = v;
+    u.pitch = state.pitch;
+    const v = pickVoice();
+    if (v) { u.voice = v; u.lang = v.lang; }
     const t = setTimeout(resolve, 30000);
     u.onend = u.onerror = () => { clearTimeout(t); resolve(); };
     speechSynthesis.speak(u);
@@ -838,6 +848,32 @@ $('#rate').addEventListener('input', (e) => {
   $('#rateVal').textContent = state.rate;
   store.set('rate', state.rate);
 });
+
+function renderVoices() {
+  const sel = $('#voice');
+  const list = enVoices();
+  sel.replaceChildren(el('option', '', 'อัตโนมัติ'));
+  sel.firstChild.value = '';
+  for (const v of list) {
+    const o = el('option', '', v.name + ' (' + v.lang + ')');
+    o.value = v.voiceURI;
+    sel.append(o);
+  }
+  sel.value = list.some((v) => v.voiceURI === state.voice) ? state.voice : '';
+}
+if ('speechSynthesis' in window) {
+  renderVoices();
+  speechSynthesis.addEventListener?.('voiceschanged', renderVoices); // รายการเสียงโหลดทีหลังในบางเบราว์เซอร์
+}
+$('#voice').addEventListener('change', (e) => { state.voice = e.target.value; store.set('voice', state.voice); speak('Nice to meet you.'); });
+$('#pitch').value = state.pitch;
+$('#pitchVal').textContent = state.pitch;
+$('#pitch').addEventListener('input', (e) => {
+  state.pitch = Number(e.target.value);
+  $('#pitchVal').textContent = state.pitch;
+  store.set('pitch', state.pitch);
+});
+$('#voiceTest').addEventListener('click', () => speak('Hi, nice to meet you. How is your day going?'));
 
 $('#testBtn').addEventListener('click', async () => {
   const out = $('#testResult');
