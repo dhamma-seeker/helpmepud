@@ -217,3 +217,18 @@ main { flex: 1; min-height: 0; position: relative; }
 #ttsInstr { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; width: 100%; }
 .sheetbox > * { flex-shrink: 0; }
 .sheetbox > #sheetList { flex: 1 1 auto; min-height: 0; flex-shrink: 1; }
+
+/* ค้นเว็บ / โน้ต / สำรองข้อมูล */
+.tabs button { font-size: 11px; }
+.pane { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.pane[hidden] { display: none; }
+.sources { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; font-size: 13px; }
+.sources:empty { display: none; }
+.srclabel { color: var(--muted); font-size: 12px; }
+.sources a { color: var(--accent); word-break: break-all; }
+.micbtn.small { width: 46px; font-size: 13px; }
+label.row.small { font-size: 14px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.card.note.pinned { border-color: var(--accent); }
+.notetext { white-space: pre-wrap; word-break: break-word; }
+.noteedit { width: 100%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px; resize: vertical; }
+#importBox .btnrow { flex-wrap: wrap; }

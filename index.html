@@ -78,10 +78,39 @@
     <button id="askClear" class="link" type="button">ล้างบทสนทนาหัวข้อนี้</button>
   </section>
 
-  <!-- ที่บันทึก -->
-  <section id="tab-saved" class="tab">
-    <input id="savedSearch" type="search" class="search" placeholder="ค้นหาประโยคที่บันทึกไว้">
-    <div id="savedLog" class="log"></div>
+  <!-- ค้นเว็บ -->
+  <section id="tab-web" class="tab">
+    <p class="note">ถามอะไรก็ได้ โมเดลจะค้นเว็บให้เมื่อต้องการข้อมูลล่าสุด การค้นเว็บคิดเงินเพิ่มต่อครั้ง (ราว $0.001 ถึง $0.015 ตามเครื่องมือค้น) นอกเหนือจากค่าโมเดล</p>
+    <div id="webLog" class="log"></div>
+    <form class="composer" id="webForm">
+      <textarea id="webInput" rows="2" placeholder="พิมพ์หรือกดไมค์เพื่อถาม..."></textarea>
+      <button type="button" id="webMic" class="micbtn" aria-label="พูดแทนการพิมพ์">🎤</button>
+      <button type="submit" class="send">ถาม</button>
+    </form>
+    <button id="webClear" class="link" type="button">ล้างบทสนทนา</button>
+  </section>
+
+  <!-- โน้ต + ประโยคที่บันทึก -->
+  <section id="tab-notes" class="tab">
+    <div class="seg" id="notesSeg">
+      <button data-pane="notes" class="on">📝 โน้ต</button>
+      <button data-pane="saved">⭐ ประโยคโปรด</button>
+    </div>
+    <div id="notesPane" class="pane">
+      <form class="composer" id="noteForm">
+        <textarea id="noteInput" rows="2" placeholder="จดอะไรไว้..."></textarea>
+        <button type="button" id="noteLang" class="micbtn small" aria-label="ภาษาที่ฟัง">ไทย</button>
+        <button type="button" id="noteMic" class="micbtn" aria-label="จดด้วยเสียง">🎤</button>
+        <button type="submit" class="send">จด</button>
+      </form>
+      <label class="row small" id="noteAutoRow"><input type="checkbox" id="noteAuto"> จดอัตโนมัติเมื่อพูดจบ</label>
+      <input id="noteSearch" type="search" class="search" placeholder="ค้นหาโน้ต">
+      <div id="noteLog" class="log"></div>
+    </div>
+    <div id="savedPane" class="pane" hidden>
+      <input id="savedSearch" type="search" class="search" placeholder="ค้นหาประโยคที่บันทึกไว้">
+      <div id="savedLog" class="log"></div>
+    </div>
   </section>
 
   <!-- ตั้งค่า -->
@@ -138,6 +167,23 @@
       </form>
       <p class="note">รองรับ MCP แบบ Streamable HTTP ที่ไม่ต้องล็อกอิน และเซิร์ฟเวอร์ต้องเปิด CORS ให้เว็บเรียกได้</p>
 
+      <label>สำรอง / ย้ายข้อมูล</label>
+      <label class="row"><input type="checkbox" id="exportKey"> รวม API key ในไฟล์ (ใครได้ไฟล์ไปจะใช้ key ของคุณได้)</label>
+      <div class="btnrow">
+        <button id="exportBtn" type="button">⬇️ ส่งออก</button>
+        <button id="importBtn" type="button">⬆️ นำเข้า</button>
+      </div>
+      <input id="importFile" type="file" accept="application/json,.json" hidden>
+      <div id="importBox" class="mcprow" hidden>
+        <p id="importInfo" class="note"></p>
+        <div class="btnrow">
+          <button id="importMerge" type="button">รวมกับข้อมูลเดิม</button>
+          <button id="importReplace" type="button">แทนที่ทั้งหมด</button>
+          <button id="importCancel" type="button">ยกเลิก</button>
+        </div>
+      </div>
+      <p class="note">ไฟล์ .json เก็บค่าตั้งค่า ประวัติ โน้ต และประโยคที่บันทึก ย้ายไฟล์ไป iPad หรือ MacBook ด้วย AirDrop หรือ iCloud Drive แล้วกดนำเข้า (เสียงของเครื่องไม่ถูกย้าย เพราะแต่ละเครื่องมีเสียงไม่เหมือนกัน)</p>
+
       <div class="btnrow">
         <button id="testBtn" type="button">ทดสอบการเชื่อมต่อ</button>
         <button id="installBtn" type="button" hidden>ติดตั้งแอป</button>
@@ -152,7 +198,8 @@
   <button data-tab="chat" class="on"><span>💬</span>แชท</button>
   <button data-tab="face"><span>🗣️</span>เจอหน้า</button>
   <button data-tab="ask"><span>❓</span>ถามคำ</button>
-  <button data-tab="saved"><span>⭐</span>บันทึก</button>
+  <button data-tab="web"><span>🌐</span>ค้นเว็บ</button>
+  <button data-tab="notes"><span>📝</span>โน้ต</button>
   <button data-tab="settings"><span>⚙️</span>ตั้งค่า</button>
 </nav>
 

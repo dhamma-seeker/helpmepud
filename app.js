@@ -25,12 +25,14 @@ const state = {
 };
 
 // โมเดลแยกตามงาน: translate = แท็บแชท/เจอหน้า, ask = ถามคำ (ภาษา), topic = หัวข้อ MCP
-const ROLES = { translate: 'แปล', ask: 'ถามคำ', topic: 'หัวข้อ MCP' };
+const ROLES = { translate: 'แปล', ask: 'ถามคำ', topic: 'หัวข้อ MCP', web: 'ค้นเว็บ' };
 const DEFAULT_MODEL = 'google/gemini-2.5-flash';
 {
   const legacy = store.get('model', DEFAULT_MODEL);
   const saved = store.get('models', {});
-  state.models = { translate: legacy, ask: legacy, topic: legacy, ...saved };
+  state.models = { translate: legacy, ask: legacy, topic: legacy, web: legacy, ...saved };
+  state.noteLang = store.get('noteLang', 'th-TH');
+  state.noteAuto = store.get('noteAuto', false);
   state.favs = store.get('favs', []);
   state.tts = { engine: 'device', model: '', voice: '', instructions: '', ...store.get('tts', {}) };
 }
@@ -40,12 +42,15 @@ const db = {
   chat: store.get('h_chat', []),
   face: store.get('h_face', []),
   ask: store.get('h_ask', {}),
+  web: store.get('h_web', []),
   saved: store.get('saved', []),
+  notes: store.get('notes', []),
 };
 const HISTORY_MAX = 150;
+const KEEP_ALL = ['saved', 'notes']; // ประวัติสนทนาตัดเหลือล่าสุด ส่วนโน้ตกับประโยคที่บันทึกเก็บทั้งหมด
 function persist(k) {
-  if (Array.isArray(db[k]) && k !== 'saved') db[k] = db[k].slice(-HISTORY_MAX);
-  store.set(k === 'saved' ? 'saved' : 'h_' + k, db[k]);
+  if (Array.isArray(db[k]) && !KEEP_ALL.includes(k)) db[k] = db[k].slice(-HISTORY_MAX);
+  store.set(KEEP_ALL.includes(k) ? k : 'h_' + k, db[k]);
 }
 
 const TONES = { casual: 'สบาย ๆ', friendly: 'เป็นกันเอง', polite: 'สุภาพ' };
@@ -57,11 +62,13 @@ const TONE_PROMPT = {
 
 /* ---------- OpenRouter ---------- */
 
-// คืน { content, tool_calls } ; onDelta รับข้อความสะสมถึงปัจจุบัน
-async function llm(messages, onDelta, { tools, signal, role = 'translate' } = {}) {
+// คืน { content, tool_calls, annotations } ; onDelta รับข้อความสะสมถึงปัจจุบัน
+// stream: false ใช้กับการค้นเว็บ เพราะรูปแบบ citation แบบไม่สตรีมมีเอกสารยืนยัน
+async function llm(messages, onDelta, { tools, signal, role = 'translate', stream = true, plugins } = {}) {
   if (!state.key) throw new Error('ยังไม่ได้ใส่ OpenRouter API key (ไปที่แท็บตั้งค่า)');
-  const body = { model: state.models[role], messages, stream: true, temperature: 0.3 };
+  const body = { model: state.models[role], messages, stream, temperature: 0.3 };
   if (tools?.length) body.tools = tools;
+  if (plugins) body.plugins = plugins;
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     signal,
@@ -77,6 +84,14 @@ async function llm(messages, onDelta, { tools, signal, role = 'translate' } = {}
     let msg = 'HTTP ' + res.status;
     try { const j = await res.json(); msg = j.error?.message || msg; } catch { /* not json */ }
     throw new Error(msg);
+  }
+  if (!stream) {
+    const j = await res.json();
+    if (j.error) throw new Error(j.error.message || 'model error');
+    const msg = j.choices?.[0]?.message || {};
+    const text = typeof msg.content === 'string' ? msg.content : (msg.content || []).map((p) => p.text || '').join('');
+    if (!text.trim()) throw new Error('โมเดลไม่ตอบกลับ ลองเปลี่ยนโมเดลในตั้งค่า');
+    return { content: text, tool_calls: msg.tool_calls || [], annotations: msg.annotations || [] };
   }
   const reader = res.body.getReader();
   const dec = new TextDecoder();
@@ -745,9 +760,11 @@ function showTab(name) {
   if (name !== 'face') contStop();
   if (name !== 'chat') chatDictateStop();
   if (name !== 'ask') askDictation.stop();
+  if (name !== 'web') webDictation.stop();
+  if (name !== 'notes') noteDictation.stop();
   $$('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + name));
   $$('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === name));
-  if (name === 'saved') renderSaved();
+  if (name === 'notes') { renderNotes(); renderSaved(); }
 }
 $$('.tabs button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
@@ -766,7 +783,8 @@ renderTones();
 /* ---------- รายการโมเดล + หน้าต่างสลับโมเดล ---------- */
 
 let currentTab = 'chat';
-const activeRole = () => (currentTab === 'ask' ? (state.topic === 'lang' ? 'ask' : 'topic') : 'translate');
+const activeRole = () => (currentTab === 'ask' ? (state.topic === 'lang' ? 'ask' : 'topic')
+  : currentTab === 'web' ? 'web' : 'translate');
 const shortName = (id) => id.split('/').slice(1).join('/') || id;
 
 function renderBadge() {
@@ -1429,9 +1447,313 @@ $('#installBtn').addEventListener('click', async () => {
   $('#installBtn').hidden = true;
 });
 
+/* ---------- ค้นเว็บ (ถามทั่วไป + web search ของ OpenRouter) ---------- */
+
+const webLog = $('#webLog');
+const WEB_EMPTY = 'ถามอะไรก็ได้ เช่น "ข่าวล่าสุดเรื่อง...", "ร้านอาหารไทยในลอนดอน", "เปรียบเทียบ iPad กับ MacBook สำหรับเรียน"';
+
+const webPrompt = () => `You are a helpful assistant with live web search. Today is ${new Date().toISOString().slice(0, 10)}.
+Answer in the language the user writes in (Thai by default). Use the search results for anything recent or factual, and cite sources as markdown links.
+Be concise and practical. If the results disagree or do not answer the question, say so instead of guessing.`;
+
+// รวม citation จาก annotations และตัดลิงก์ซ้ำ รับเฉพาะ http(s)
+function sourcesOf(annotations) {
+  const seen = new Set();
+  const out = [];
+  for (const a of annotations || []) {
+    const c = a.url_citation || (a.type === 'url_citation' ? a : null);
+    const url = c?.url;
+    if (!url || !/^https?:\/\//.test(url) || seen.has(url)) continue;
+    seen.add(url);
+    let host = url;
+    try { host = new URL(url).hostname.replace(/^www\./, ''); } catch { /* keep url */ }
+    out.push({ url, title: (c.title || host).slice(0, 120) });
+  }
+  return out;
+}
+
+function sourcesBox(list) {
+  const box = el('div', 'sources');
+  if (!list?.length) return box;
+  box.append(el('div', 'srclabel', 'แหล่งข้อมูล'));
+  for (const s of list) {
+    const a = el('a', '', s.title);
+    a.href = s.url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    box.append(a);
+  }
+  return box;
+}
+
+function drawWeb(e) {
+  const me = addCard(webLog, 'ask me');
+  me.append(el('div', 'body', e.q));
+  const ans = addCard(webLog, 'ask');
+  const body = el('div', 'body');
+  body.innerHTML = md(e.a);
+  ans.append(body, sourcesBox(e.sources), copyRow(e.a));
+}
+
+function renderWeb() {
+  webLog.replaceChildren();
+  if (!db.web.length) { emptyNote(webLog, WEB_EMPTY); return; }
+  db.web.forEach(drawWeb);
+  scrollDown(webLog);
+}
+
+$('#webForm').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const input = $('#webInput');
+  const q = input.value.trim();
+  if (!q) return;
+  input.value = '';
+  const me = addCard(webLog, 'ask me');
+  me.append(el('div', 'body', q));
+  const ans = addCard(webLog, 'ask');
+  ans.append(el('div', 'body', 'กำลังค้นหาและเรียบเรียง...'));
+  scrollDown(webLog);
+  const btn = $('#webForm .send');
+  btn.disabled = true;
+  try {
+    const history = db.web.slice(-6).flatMap((x) => [{ role: 'user', content: x.q }, { role: 'assistant', content: x.a }]);
+    const r = await llm(
+      [{ role: 'system', content: webPrompt() }, ...history, { role: 'user', content: q }],
+      null,
+      { role: 'web', stream: false, plugins: [{ id: 'web', max_results: 5 }] },
+    );
+    const entry = { q, a: r.content, sources: sourcesOf(r.annotations), ts: Date.now() };
+    me.remove();
+    ans.remove();
+    db.web.push(entry);
+    persist('web');
+    drawWeb(entry);
+    scrollDown(webLog);
+  } catch (err) {
+    me.remove();
+    ans.remove();
+    errCard(webLog, err);
+  }
+  btn.disabled = false;
+});
+autosubmit($('#webInput'), $('#webForm'));
+
+const webDictation = makeDictation({ input: $('#webInput'), btn: $('#webMic'), lang: () => 'th-TH' });
+if (SR) $('#webMic').addEventListener('click', webDictation.toggle);
+else $('#webMic').hidden = true;
+
+$('#webClear').addEventListener('click', () => confirmClear('บทสนทนาค้นเว็บ', () => {
+  db.web = []; persist('web'); renderWeb();
+}));
+
+/* ---------- โน้ต ---------- */
+
+const noteFmt = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeStyle: 'short' });
+
+function addNote(text) {
+  db.notes.unshift({ id: Date.now(), text, ts: Date.now(), pin: false });
+  persist('notes');
+  renderNotes();
+}
+
+function renderNotes() {
+  const q = $('#noteSearch').value.trim().toLowerCase();
+  const list = db.notes
+    .filter((n) => !q || n.text.toLowerCase().includes(q))
+    .sort((a, b) => (b.pin - a.pin) || (b.ts - a.ts));
+  const log = $('#noteLog');
+  if (!list.length) {
+    emptyNote(log, db.notes.length ? 'ไม่พบโน้ตที่ค้นหา' : 'ยังไม่มีโน้ต พิมพ์หรือกดไมค์แล้วพูดเพื่อจดได้เลย');
+    return;
+  }
+  log.replaceChildren(...list.map((n) => {
+    const c = el('div', 'card note' + (n.pin ? ' pinned' : ''));
+    const body = el('div', 'notetext', n.text);
+    const meta = el('div', 'sub', (n.pin ? '📌 ' : '') + noteFmt.format(n.ts));
+    const acts = el('div', 'acts');
+    acts.append(
+      actBtn('แก้ไข', () => editNote(c, n)),
+      actBtn(n.pin ? 'เลิกปักหมุด' : 'ปักหมุด', () => { n.pin = !n.pin; persist('notes'); renderNotes(); }),
+      actBtn('คัดลอก', function () { copy(n.text, this); }),
+      actBtn('ลบ', () => { if (confirm('ลบโน้ตนี้?')) { db.notes = db.notes.filter((x) => x !== n); persist('notes'); renderNotes(); } }),
+    );
+    c.append(body, meta, acts);
+    return c;
+  }));
+}
+
+function editNote(card, n) {
+  const ta = el('textarea', 'noteedit');
+  ta.value = n.text;
+  ta.rows = Math.min(10, Math.max(3, n.text.split('\n').length + 1));
+  const acts = el('div', 'acts');
+  acts.append(
+    actBtn('บันทึก', () => {
+      const t = ta.value.trim();
+      if (t) { n.text = t; persist('notes'); }
+      renderNotes();
+    }),
+    actBtn('ยกเลิก', renderNotes),
+  );
+  card.replaceChildren(ta, acts);
+  ta.focus();
+}
+
+$('#noteForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const input = $('#noteInput');
+  const t = input.value.trim();
+  if (!t) return;
+  input.value = '';
+  addNote(t);
+});
+autosubmit($('#noteInput'), $('#noteForm'));
+$('#noteSearch').addEventListener('input', renderNotes);
+
+const noteDictation = makeDictation({
+  input: $('#noteInput'),
+  btn: $('#noteMic'),
+  lang: () => state.noteLang,
+  onDone: () => { if (state.noteAuto) $('#noteForm').requestSubmit(); },
+});
+function renderNoteLang() { $('#noteLang').textContent = state.noteLang === 'th-TH' ? 'ไทย' : 'EN'; }
+renderNoteLang();
+if (SR) {
+  $('#noteMic').addEventListener('click', noteDictation.toggle);
+  $('#noteLang').addEventListener('click', () => {
+    state.noteLang = state.noteLang === 'th-TH' ? 'en-US' : 'th-TH';
+    store.set('noteLang', state.noteLang);
+    renderNoteLang();
+  });
+  $('#noteAuto').checked = state.noteAuto;
+  $('#noteAuto').addEventListener('change', (e) => { state.noteAuto = e.target.checked; store.set('noteAuto', state.noteAuto); });
+} else {
+  $('#noteMic').hidden = $('#noteLang').hidden = $('#noteAutoRow').hidden = true;
+}
+
+$$('#notesSeg button').forEach((b) => b.addEventListener('click', () => {
+  $$('#notesSeg button').forEach((x) => x.classList.toggle('on', x === b));
+  $('#notesPane').hidden = b.dataset.pane !== 'notes';
+  $('#savedPane').hidden = b.dataset.pane !== 'saved';
+}));
+
+/* ---------- ส่งออก / นำเข้า ---------- */
+
+const SETTING_KEYS = ['models', 'favs', 'tts', 'tone', 'autoSpeak', 'rate', 'pitch', 'autoSend', 'topic', 'mcp', 'noteLang', 'noteAuto'];
+
+function buildExport(withKey) {
+  const settings = {
+    models: state.models, favs: state.favs, tts: state.tts, tone: state.tone, autoSpeak: state.autoSpeak,
+    rate: state.rate, pitch: state.pitch, autoSend: state.autoSend, topic: state.topic, mcp: mcpServers,
+    noteLang: state.noteLang, noteAuto: state.noteAuto,
+  };
+  if (withKey) settings.key = state.key;
+  return {
+    app: 'helpmepud', version: 1, exportedAt: new Date().toISOString(), settings,
+    data: { chat: db.chat, face: db.face, ask: db.ask, web: db.web, saved: db.saved, notes: db.notes },
+  };
+}
+
+$('#exportBtn').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(buildExport($('#exportKey').checked), null, 2)], { type: 'application/json' });
+  const a = el('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'helpmepud-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+});
+
+let pendingImport = null;
+
+// ตรวจชนิดข้อมูลจากไฟล์ที่ผู้ใช้เลือก ไม่เชื่อรูปแบบโดยไม่ตรวจ
+function cleanImport(obj) {
+  const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+  const arr = (v) => (Array.isArray(v) ? v.filter(isObj) : []);
+  const s = isObj(obj.settings) ? obj.settings : {};
+  const d = isObj(obj.data) ? obj.data : {};
+  const okUrl = (u) => typeof u === 'string' && (/^https:\/\//.test(u) || /^http:\/\/(localhost|127\.0\.0\.1)/.test(u));
+  const settings = {};
+  if (isObj(s.models)) settings.models = Object.fromEntries(Object.entries(s.models).filter(([k, v]) => k in ROLES && typeof v === 'string'));
+  if (Array.isArray(s.favs)) settings.favs = s.favs.filter((x) => typeof x === 'string');
+  if (isObj(s.tts)) settings.tts = { engine: s.tts.engine === 'openrouter' ? 'openrouter' : 'device', model: String(s.tts.model || ''), voice: String(s.tts.voice || ''), instructions: String(s.tts.instructions || '') };
+  if (s.tone in TONES) settings.tone = s.tone;
+  for (const k of ['autoSpeak', 'autoSend', 'noteAuto']) if (typeof s[k] === 'boolean') settings[k] = s[k];
+  for (const k of ['rate', 'pitch']) if (typeof s[k] === 'number' && s[k] > 0 && s[k] < 3) settings[k] = s[k];
+  if (typeof s.topic === 'string') settings.topic = s.topic;
+  if (s.noteLang === 'th-TH' || s.noteLang === 'en-US') settings.noteLang = s.noteLang;
+  if (Array.isArray(s.mcp)) {
+    settings.mcp = s.mcp.filter((m) => isObj(m) && okUrl(m.url) && m.name)
+      .map((m) => ({ id: String(m.id || 'mcp' + Date.now()), name: String(m.name), url: m.url, enabled: m.enabled !== false }));
+  }
+  if (typeof s.key === 'string' && s.key) settings.key = s.key;
+  const ask = {};
+  if (isObj(d.ask)) for (const [k, v] of Object.entries(d.ask)) ask[k] = arr(v);
+  return { settings, data: { chat: arr(d.chat), face: arr(d.face), web: arr(d.web), saved: arr(d.saved), notes: arr(d.notes), ask } };
+}
+
+function applyImport(clean, mode) {
+  for (const [k, v] of Object.entries(clean.settings)) store.set(k, v);
+  const idOf = (x) => x.id ?? x.ts ?? 0;
+  const merge = (cur, inc, keyFn) => {
+    const seen = new Set(cur.map(keyFn));
+    return cur.concat(inc.filter((x) => !seen.has(keyFn(x))));
+  };
+  const lists = {
+    h_chat: ['chat', (x) => idOf(x) + '|' + x.src, 1],
+    h_face: ['face', (x) => idOf(x) + '|' + x.src, 1],
+    h_web: ['web', (x) => idOf(x) + '|' + x.q, 1],
+    saved: ['saved', (x) => x.en, -1],
+    notes: ['notes', (x) => idOf(x) + '|' + x.text, -1],
+  };
+  for (const [key, [name, keyFn, dir]] of Object.entries(lists)) {
+    const inc = clean.data[name];
+    const next = mode === 'replace' ? inc : merge(db[name], inc, keyFn);
+    next.sort((a, b) => dir * (idOf(a) - idOf(b)));
+    store.set(key, next);
+  }
+  const ask = mode === 'replace' ? {} : { ...db.ask };
+  for (const [topic, inc] of Object.entries(clean.data.ask)) {
+    ask[topic] = merge(ask[topic] || [], inc, (x) => x.ts + '|' + x.q).sort((a, b) => a.ts - b.ts);
+  }
+  store.set('h_ask', ask);
+  location.reload();
+}
+
+$('#importBtn').addEventListener('click', () => $('#importFile').click());
+$('#importFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const obj = JSON.parse(await file.text());
+    if (obj?.app !== 'helpmepud') throw new Error('ไม่ใช่ไฟล์สำรองของแอปนี้');
+    pendingImport = cleanImport(obj);
+    const c = pendingImport.data;
+    const asks = Object.values(c.ask).reduce((n, l) => n + l.length, 0);
+    $('#importInfo').textContent = `พบ: แชท ${c.chat.length}, เจอหน้า ${c.face.length}, ถามคำ ${asks}, ค้นเว็บ ${c.web.length}, ` +
+      `ประโยคที่บันทึก ${c.saved.length}, โน้ต ${c.notes.length}` +
+      (pendingImport.settings.key ? ', รวม API key' : '') +
+      '. ค่าตั้งค่าในไฟล์จะทับค่าบนเครื่องนี้ ส่วนข้อมูลเลือกได้ว่าจะรวมหรือแทนที่';
+    $('#importBox').hidden = false;
+  } catch (err) {
+    pendingImport = null;
+    $('#importBox').hidden = true;
+    alert('นำเข้าไม่ได้: ' + err.message);
+  }
+});
+$('#importMerge').addEventListener('click', () => pendingImport && applyImport(pendingImport, 'merge'));
+$('#importReplace').addEventListener('click', () => {
+  if (pendingImport && confirm('แทนที่ประวัติ โน้ต และประโยคที่บันทึกบนเครื่องนี้ด้วยข้อมูลในไฟล์ทั้งหมด?')) applyImport(pendingImport, 'replace');
+});
+$('#importCancel').addEventListener('click', () => { pendingImport = null; $('#importBox').hidden = true; });
+
 renderMcp();
 renderTopics();
 renderAsk();
+renderWeb();
+renderNotes();
 renderSaved();
 renderCont();
 
