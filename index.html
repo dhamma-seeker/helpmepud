@@ -210,13 +210,14 @@
       <input id="importFile" type="file" accept="application/json,.json" hidden>
       <div id="importBox" class="mcprow" hidden>
         <p id="importInfo" class="note"></p>
+        <label class="row small"><input type="checkbox" id="importSettings" checked> ใช้ค่าตั้งค่าในไฟล์ทับของเครื่องนี้ (โมเดล เสียง MCP และอื่น ๆ)</label>
         <div class="btnrow">
           <button id="importMerge" type="button">รวมกับข้อมูลเดิม</button>
           <button id="importReplace" type="button">แทนที่ทั้งหมด</button>
           <button id="importCancel" type="button">ยกเลิก</button>
         </div>
       </div>
-      <p class="note">ไฟล์ .json เก็บค่าตั้งค่า ประวัติ โน้ต และประโยคที่บันทึก ย้ายไฟล์ไป iPad หรือ MacBook ด้วย AirDrop หรือ iCloud Drive แล้วกดนำเข้า (เสียงของเครื่องไม่ถูกย้าย เพราะแต่ละเครื่องมีเสียงไม่เหมือนกัน)</p>
+      <p class="note">กด "ส่งออก" แล้วเลือก "บันทึกลงไฟล์" เพื่อเก็บใน iCloud Drive หรือเลือก AirDrop ส่งไปอีกเครื่อง อีกเครื่องกด "นำเข้า" แล้วเลือกไฟล์จาก iCloud Drive ชื่อไฟล์คงที่ (helpmepud-sync.json) iCloud จะถามว่าแทนที่ไฟล์เดิมหรือไม่ การนำเข้าแบบ "รวม" ไม่ทำให้ข้อมูลซ้ำ แต่ไม่ลบรายการที่เครื่องอื่นลบไปแล้ว (เสียงของเครื่องไม่ถูกย้าย เพราะแต่ละเครื่องมีเสียงไม่เหมือนกัน)</p>
 
       <div class="btnrow">
         <button id="testBtn" type="button">ทดสอบการเชื่อมต่อ</button>

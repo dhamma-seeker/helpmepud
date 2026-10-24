@@ -2118,11 +2118,23 @@ function buildExport(withKey) {
   };
 }
 
-$('#exportBtn').addEventListener('click', () => {
-  const blob = new Blob([JSON.stringify(buildExport($('#exportKey').checked), null, 2)], { type: 'application/json' });
+// ส่งออก: เปิดแผ่นแชร์ของระบบ (iPhone/iPad/Mac) เลือก "บันทึกลงไฟล์" > iCloud Drive หรือ AirDrop ได้ในการแตะครั้งเดียว
+// ถ้าเบราว์เซอร์ไม่รองรับการแชร์ไฟล์ จะดาวน์โหลดเป็นไฟล์แทน ชื่อไฟล์คงที่เพื่อให้ iCloud ถามว่าจะแทนที่ไฟล์เดิม
+$('#exportBtn').addEventListener('click', async () => {
+  const json = JSON.stringify(buildExport($('#exportKey').checked), null, 2);
+  const name = 'helpmepud-sync.json';
+  const file = new File([json], name, { type: 'application/json' });
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: 'HelpMePud' });
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return; // ผู้ใช้ปิดแผ่นแชร์
+    }
+  }
   const a = el('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'helpmepud-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+  a.href = URL.createObjectURL(file);
+  a.download = name;
   document.body.append(a);
   a.click();
   a.remove();
@@ -2159,8 +2171,8 @@ function cleanImport(obj) {
   return { settings, data: { chat: arr(d.chat), face: arr(d.face), web: arr(d.web), saved: arr(d.saved), notes: arr(d.notes), ask } };
 }
 
-function applyImport(clean, mode) {
-  for (const [k, v] of Object.entries(clean.settings)) store.set(k, v);
+function applyImport(clean, mode, withSettings = true) {
+  if (withSettings) for (const [k, v] of Object.entries(clean.settings)) store.set(k, v);
   const idOf = (x) => x.id ?? x.ts ?? 0;
   const merge = (cur, inc, keyFn) => {
     const seen = new Set(cur.map(keyFn));
@@ -2201,7 +2213,7 @@ $('#importFile').addEventListener('change', async (e) => {
     $('#importInfo').textContent = `พบ: แชท ${c.chat.length}, เจอหน้า ${c.face.length}, ถามคำ ${asks}, ค้นเว็บ ${c.web.length}, ` +
       `ประโยคที่บันทึก ${c.saved.length}, โน้ต ${c.notes.length}` +
       (pendingImport.settings.key ? ', รวม API key' : '') +
-      '. ค่าตั้งค่าในไฟล์จะทับค่าบนเครื่องนี้ ส่วนข้อมูลเลือกได้ว่าจะรวมหรือแทนที่';
+      '. เลือกได้ว่าจะรวมหรือแทนที่ข้อมูล และจะใช้ค่าตั้งค่าในไฟล์ทับของเครื่องนี้หรือไม่';
     $('#importBox').hidden = false;
   } catch (err) {
     pendingImport = null;
@@ -2209,9 +2221,10 @@ $('#importFile').addEventListener('change', async (e) => {
     alert('นำเข้าไม่ได้: ' + err.message);
   }
 });
-$('#importMerge').addEventListener('click', () => pendingImport && applyImport(pendingImport, 'merge'));
+const withSettings = () => $('#importSettings').checked;
+$('#importMerge').addEventListener('click', () => pendingImport && applyImport(pendingImport, 'merge', withSettings()));
 $('#importReplace').addEventListener('click', () => {
-  if (pendingImport && confirm('แทนที่ประวัติ โน้ต และประโยคที่บันทึกบนเครื่องนี้ด้วยข้อมูลในไฟล์ทั้งหมด?')) applyImport(pendingImport, 'replace');
+  if (pendingImport && confirm('แทนที่ประวัติ โน้ต และประโยคที่บันทึกบนเครื่องนี้ด้วยข้อมูลในไฟล์ทั้งหมด?')) applyImport(pendingImport, 'replace', withSettings());
 });
 $('#importCancel').addEventListener('click', () => { pendingImport = null; $('#importBox').hidden = true; });
 
