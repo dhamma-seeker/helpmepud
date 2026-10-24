@@ -19,6 +19,7 @@ const state = {
   autoSpeak: store.get('autoSpeak', true),
   rate: store.get('rate', 0.95),
   pitch: store.get('pitch', 1),
+  autoSend: store.get('autoSend', false),
   voice: store.get('voice', ''), // voiceURI ของเสียงที่เลือก ว่าง = เลือกให้อัตโนมัติ
   dir: 'th-en',
   topic: store.get('topic', 'lang'),
@@ -520,6 +521,7 @@ async function translate(log, key, src, dir, opts = {}) {
 
 function showTab(name) {
   if (name !== 'face') contStop();
+  if (name !== 'chat') chatDictateStop();
   $$('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + name));
   $$('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === name));
   if (name === 'saved') renderSaved();
@@ -558,7 +560,10 @@ renderHistory($('#chatLog'), 'chat', CHAT_EMPTY);
 $$('#chatDir button').forEach((b) => b.addEventListener('click', () => {
   state.dir = b.dataset.dir;
   $$('#chatDir button').forEach((x) => x.classList.toggle('on', x === b));
-  $('#chatInput').placeholder = state.dir === 'th-en' ? 'พิมพ์ภาษาไทย...' : 'วางข้อความภาษาอังกฤษของเพื่อน...';
+  $('#chatInput').placeholder = state.dir === 'th-en'
+    ? 'พิมพ์หรือกดไมค์เพื่อพูดไทย...'
+    : 'วางข้อความของเพื่อน หรือกดไมค์ให้เพื่อนพูด (อังกฤษ)...';
+  chatDictateStop();
   $('.seg.tone-seg', $('#tab-chat')).style.visibility = state.dir === 'th-en' ? 'visible' : 'hidden';
 }));
 
@@ -574,6 +579,54 @@ $('#chatForm').addEventListener('submit', async (e) => {
   btn.disabled = false;
 });
 autosubmit($('#chatInput'), $('#chatForm'));
+
+// พูดแทนการพิมพ์: ข้อความที่ได้ยินลงในช่องพิมพ์ ให้แก้ก่อนส่งได้ (หรือเปิดส่งอัตโนมัติ)
+let chatRec = null;
+
+function chatDictateStop() { try { chatRec?.stop(); } catch { /* stopped */ } }
+
+function chatDictate() {
+  if (chatRec) { chatDictateStop(); return; }
+  if (activeRec) activeRec.abort();
+  const input = $('#chatInput');
+  const btn = $('#chatMic');
+  const base = input.value.trim();
+  const rec = new SR();
+  rec.lang = state.dir === 'th-en' ? 'th-TH' : 'en-US';
+  rec.interimResults = true;
+  rec.continuous = false;
+  let heard = '';
+  const join = (t) => (base ? base + ' ' : '') + t;
+  rec.onresult = (e) => {
+    heard = '';
+    for (const r of e.results) heard += r[0].transcript;
+    input.value = join(heard.trim());
+  };
+  rec.onerror = (e) => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') alert('ต้องอนุญาตการใช้ไมโครโฟนก่อน');
+  };
+  rec.onend = () => {
+    chatRec = null;
+    btn.classList.remove('rec');
+    btn.textContent = '🎤';
+    input.focus({ preventScroll: true });
+    if (heard.trim() && state.autoSend) $('#chatForm').requestSubmit();
+  };
+  chatRec = rec;
+  btn.classList.add('rec');
+  btn.textContent = '■';
+  try { rec.start(); } catch { chatRec = null; btn.classList.remove('rec'); btn.textContent = '🎤'; }
+}
+
+if (SR) {
+  $('#chatMic').addEventListener('click', chatDictate);
+  $('#autoSend').checked = state.autoSend;
+  $('#autoSend').addEventListener('change', (e) => { state.autoSend = e.target.checked; store.set('autoSend', state.autoSend); });
+} else {
+  $('#chatMic').hidden = true;
+  $('#autoSendRow').hidden = true;
+}
+
 $('#chatClear').addEventListener('click', () => confirmClear('ประวัติแชท', () => {
   db.chat = []; persist('chat'); renderHistory($('#chatLog'), 'chat', CHAT_EMPTY);
 }));

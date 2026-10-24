@@ -31,10 +31,14 @@
     <div class="seg small tone-seg"></div>
     <div id="chatLog" class="log"></div>
     <form class="composer" id="chatForm">
-      <textarea id="chatInput" rows="2" placeholder="พิมพ์ภาษาไทย..."></textarea>
+      <textarea id="chatInput" rows="2" placeholder="พิมพ์หรือกดไมค์เพื่อพูด..."></textarea>
+      <button type="button" id="chatMic" class="micbtn" aria-label="พูดแทนการพิมพ์">🎤</button>
       <button type="submit" class="send" aria-label="ส่ง">ส่ง</button>
     </form>
-    <button id="chatClear" class="link" type="button">ล้างประวัติ</button>
+    <div class="chatopts">
+      <label class="row" id="autoSendRow"><input type="checkbox" id="autoSend"> ส่งอัตโนมัติเมื่อพูดจบ</label>
+      <button id="chatClear" class="link" type="button">ล้างประวัติ</button>
+    </div>
   </section>
 
   <!-- เจอหน้า -->
